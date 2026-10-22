@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+.venv-voice/
+.runtime-voice/
+__pycache__/
+.superpowers/
+generation/
+data/projects.json
+data/projects/
+data/media/
+data/storyboard.json
