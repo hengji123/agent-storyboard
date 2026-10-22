@@ -370,6 +370,7 @@
       <div class="board-toolbar">
         <details class="pacing-panel"><summary id="pacing-summary">节奏检查</summary><ul id="pacing-results"></ul></details>
         <div class="board-tools">
+          <button id="bulk-edit-shots" class="secondary compact-button" type="button">批量修改镜头信息</button>
           <input id="shot-search" class="shot-search" type="search" placeholder="搜索台词 / 画面 / 动作 / 调度" aria-label="搜索镜头" />
           <div class="density-toggle" role="group" aria-label="行高">
             <button type="button" data-density="comfortable" title="详细：显示完整文案和大预览">详细</button>
@@ -390,7 +391,7 @@
         <thead>
           <tr>
             <th>#</th>
-            <th>镜头信息</th>
+            <th>镜头信息 <button id="bulk-edit-shots-header" class="header-bulk-edit" type="button" title="批量修改类型、媒体、时长和生成方式">批量修改</button></th>
             <th>旁白 / 对白</th>
             <th>画面与导演设计</th>
             <th>静态参考图 / 素材</th>
@@ -499,6 +500,25 @@
     </tr>
   </template>
 
+  <dialog id="bulk-shot-dialog" class="form-dialog bulk-shot-dialog">
+    <form id="bulk-shot-form" method="dialog">
+      <h2>批量修改镜头信息</h2>
+      <label class="form-field"><span>修改范围</span><select id="bulk-shot-scope"><option value="all">全部镜头</option><option value="filtered">当前搜索结果</option><option value="selected">指定镜头</option></select></label>
+      <section id="bulk-shot-picker" hidden>
+        <div class="bulk-picker-actions"><button id="bulk-shot-select-all" type="button" class="secondary compact-button">全选</button><button id="bulk-shot-select-none" type="button" class="secondary compact-button">清空</button></div>
+        <div id="bulk-shot-list"></div>
+      </section>
+      <div class="bulk-shot-fields">
+        <label class="form-field"><span>镜头类型</span><select id="bulk-shot-rollType"><option value="">保持不变</option><option value="A-ROLL">A-ROLL</option><option value="B-ROLL">B-ROLL</option></select></label>
+        <label class="form-field"><span>媒体类型</span><select id="bulk-shot-mediaType"><option value="">保持不变</option><option value="image">图片</option><option value="video">视频</option></select></label>
+        <label class="form-field"><span>时长（秒）</span><input id="bulk-shot-duration" type="number" min="0" step="0.5" placeholder="留空保持不变" /></label>
+        <label class="form-field"><span>生成方式</span><select id="bulk-shot-generator"><option value="">保持不变</option><option value="image-gen">AI 生图</option><option value="manual">手动素材</option><option value="hyperframes">HyperFrames 动效</option><option value="remotion">Remotion 动效</option></select></label>
+      </div>
+      <p id="bulk-shot-summary" role="status"></p>
+      <small>仅应用明确填写的参数。旁白、画面、动作、调度和已有图片会保留；此操作不会发起生成。</small>
+      <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>取消</button><button id="bulk-shot-submit" type="submit" class="primary" disabled>应用修改</button></div>
+    </form>
+  </dialog>
   <dialog id="batch-image-dialog" class="form-dialog">
     <form id="batch-image-form" method="dialog">
       <h2 id="batch-image-title">批量生成参考图</h2>

@@ -70,8 +70,8 @@ const selectOptions = {
     { value: "video", label: "视频" }
   ],
   generator: [
-    { value: "manual", label: "手动素材", hint: "自己上传图片或视频" },
     { value: "image-gen", label: "AI 生图", hint: "Image Generation：按画面描述生成图片" },
+    { value: "manual", label: "手动素材", hint: "自己上传图片或视频" },
     { value: "hyperframes", label: "HyperFrames 动效", hint: "用 HTML 生成动画 / 字幕 / 信息图视频" },
     { value: "remotion", label: "Remotion 动效", hint: "用 React 生成程序化动画视频" }
   ]
@@ -2106,6 +2106,67 @@ function attachRowDrag(row, shot) {
   });
 }
 
+const bulkShotSelection = new Set();
+function bulkShotTargets() {
+  const scope = document.querySelector('#bulk-shot-scope').value;
+  return (project?.shots || []).filter(shot => scope === 'all' || (scope === 'filtered' ? shotMatches(shot, shotQuery) : bulkShotSelection.has(shot.id)));
+}
+function bulkShotFields() {
+  const fields = {};
+  for (const name of ['rollType', 'mediaType', 'duration', 'generator']) {
+    const value = document.querySelector('#bulk-shot-' + name).value;
+    if (value !== '') fields[name] = name === 'duration' ? Number(value) : value;
+  }
+  return fields;
+}
+function updateBulkShotSummary() {
+  const count = bulkShotTargets().length;
+  const fields = bulkShotFields();
+  const fieldCount = Object.keys(fields).length;
+  document.querySelector('#bulk-shot-picker').hidden = document.querySelector('#bulk-shot-scope').value !== 'selected';
+  document.querySelector('#bulk-shot-summary').textContent = `将修改 ${count} 个镜头的 ${fieldCount} 项参数；其余参数保持不变。`;
+  document.querySelector('#bulk-shot-submit').disabled = !count || !fieldCount;
+}
+function openBulkShotDialog() {
+  if (!project?.shots.length) { showToast('请先添加镜头'); return; }
+  document.querySelector('#bulk-shot-form').reset();
+  document.querySelector('#bulk-shot-scope').value = shotQuery.trim() ? 'filtered' : 'all';
+  bulkShotSelection.clear();
+  const list = document.querySelector('#bulk-shot-list'); list.replaceChildren();
+  project.shots.forEach((shot, index) => {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = shot.id;
+    const text = document.createElement('span');
+    text.textContent = `${String(index + 1).padStart(2, '0')} · ${(shot.dialogue || shot.visualPrompt || '未填写描述').slice(0, 75)}`;
+    checkbox.addEventListener('change', () => { if (checkbox.checked) bulkShotSelection.add(shot.id); else bulkShotSelection.delete(shot.id); updateBulkShotSummary(); });
+    label.append(checkbox, text); list.append(label);
+  });
+  updateBulkShotSummary(); document.querySelector('#bulk-shot-dialog').showModal();
+}
+document.querySelector('#bulk-edit-shots').addEventListener('click', openBulkShotDialog);
+document.querySelector('#bulk-edit-shots-header').addEventListener('click', openBulkShotDialog);
+document.querySelector('#bulk-shot-form').addEventListener('input', updateBulkShotSummary);
+document.querySelector('#bulk-shot-form').addEventListener('change', updateBulkShotSummary);
+for (const [button, checked] of [['bulk-shot-select-all', true], ['bulk-shot-select-none', false]]) {
+  document.querySelector('#' + button).addEventListener('click', () => {
+    bulkShotSelection.clear();
+    document.querySelectorAll('#bulk-shot-list input').forEach(input => { input.checked = checked; if (checked) bulkShotSelection.add(input.value); });
+    updateBulkShotSummary();
+  });
+}
+document.querySelector('#bulk-shot-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const fields = bulkShotFields(), shotIds = bulkShotTargets().map(shot => shot.id);
+  if (!shotIds.length || !Object.keys(fields).length) return;
+  document.querySelector('#bulk-shot-submit').disabled = true;
+  try {
+    await flushSave();
+    const result = await api(`/api/projects/${encodeURIComponent(project.id)}/shots/bulk`, { method: 'PATCH', body: JSON.stringify({ shotIds, fields, updatedAt: project.updatedAt, contentRevision: project.contentRevision }) });
+    project = result.project;
+    document.querySelector('#bulk-shot-dialog').close(); renderStoryboard();
+    showToast(`已批量修改 ${result.updatedShotIds.length} 个镜头`);
+  } catch (error) { updateBulkShotSummary(); document.querySelector('#bulk-shot-summary').textContent = error.message; }
+});
 const openDirectorShots = new Set();
 function imageCanQueue(shot, kind, includeReady = false) {
   const state = shot.imageGeneration?.[kind] || {};

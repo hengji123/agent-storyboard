@@ -310,6 +310,8 @@ function shotSchema({ requireId = false } = {}) {
       blockingDescription: { type: 'string', description: 'Camera position, subject positions, eyelines, movement paths and axis constraints; separate from final visual appearance.' },
       generator: {
         type: "string",
+        default: 'image-gen',
+        description: 'Default image-gen (AI image generation); select manual only for explicitly uploaded final materials.',
         enum: ["manual", "image-gen", "hyperframes", "remotion"]
       },
       notes: { type: "string" }

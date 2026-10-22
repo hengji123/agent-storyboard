@@ -229,7 +229,7 @@ function normalizeShot(shot = {}) {
     imageGeneration: normalizeImageGeneration(shot.imageGeneration),
     generator: ["manual", "image-gen", "hyperframes", "remotion"].includes(shot.generator)
       ? shot.generator
-      : "manual",
+      : "image-gen",
     mediaUrl: String(shot.mediaUrl || ""),
     notes: String(shot.notes || ""),
     generationStatus,
@@ -1290,6 +1290,30 @@ async function handleProjectsApi(request, response, url) {
 }
 
 async function handleShotsApi(request, response, url) {
+  const bulkMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/bulk$/);
+  if (bulkMatch && request.method === 'PATCH') {
+    const project = await readProject(decodeURIComponent(bulkMatch[1]));
+    const body = await readBody(request);
+    if (body.updatedAt && body.updatedAt !== project.updatedAt && body.contentRevision !== project.contentRevision) return sendError(response, 409, '镜头已在其他窗口修改，请刷新后重新选择');
+    if (!Array.isArray(body.shotIds) || !body.shotIds.length) return sendError(response, 400, '请至少选择一个镜头');
+    const selected = new Set(body.shotIds.map(String));
+    if ([...selected].some(id => !project.shots.some(shot => shot.id === id))) return sendError(response, 404, '所选镜头已不存在，请刷新后重试');
+    const fields = body.fields;
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields) || !Object.keys(fields).length) return sendError(response, 400, '请至少修改一个参数');
+    const choices = { rollType: ['A-ROLL', 'B-ROLL'], mediaType: ['image', 'video'], generator: ['image-gen', 'manual', 'hyperframes', 'remotion'] };
+    for (const [key, value] of Object.entries(fields)) {
+      if (key === 'duration') {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return sendError(response, 400, '时长必须是大于等于 0 的秒数');
+      } else if (!Object.hasOwn(choices, key) || !choices[key].includes(value)) return sendError(response, 400, `不支持的镜头参数：${key}`);
+    }
+    if (fields.generator !== undefined || fields.mediaType !== undefined) {
+      if (project.shots.some(shot => selected.has(shot.id) && ['pending', 'processing'].includes(shot.generationStatus))) return sendError(response, 409, '所选镜头有最终素材任务正在执行，请先取消任务再修改媒体或生成方式');
+    }
+    project.shots = project.shots.map(shot => selected.has(shot.id) ? normalizeShot({ ...shot, ...fields }) : shot);
+    await reconcileMediaOrder(project);
+    const saved = await saveProject(project);
+    return sendJson(response, 200, { project: saved, updatedShotIds: [...selected] });
+  }
   const blockingMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/(blocking|reference)-image$/);
   if (blockingMatch) {
     const project = await readProject(decodeURIComponent(blockingMatch[1]));

@@ -33,6 +33,30 @@ test("project persistence, conflict detection, generation cancellation and recov
     const directorPath = `${path}/shots/${directorShot.id}`;
     project = (await request(directorPath, 'PATCH', { actionDescription: '人物转身后停下', blockingDescription: '相机在南侧，人物向门口移动' })).data;
     assert.equal(project.shots[0].actionDescription, '人物转身后停下');
+    const bulkProject = (await request('/api/projects', 'POST', { title: 'Bulk parameters', shots: [
+      { dialogue: 'Keep first', duration: 5, actionDescription: 'Keep action', notes: 'Keep notes' },
+      { dialogue: 'Keep second', duration: 7, generator: 'manual' },
+      { dialogue: 'Keep third', duration: 9, generator: 'remotion' }
+    ] })).data;
+    assert.equal(bulkProject.shots[0].generator, 'image-gen');
+    assert.equal(bulkProject.shots[1].generator, 'manual');
+    const bulkPath = `/api/projects/${bulkProject.id}/shots/bulk`;
+    const bulkIds = [bulkProject.shots[0].id, bulkProject.shots[2].id];
+    const bulkResult = await request(bulkPath, 'PATCH', { shotIds: bulkIds, fields: { duration: 0, generator: 'image-gen', rollType: 'A-ROLL' } });
+    assert.equal(bulkResult.status, 200);
+    assert.equal(bulkResult.data.updatedShotIds.length, 2);
+    assert.deepEqual(bulkResult.data.project.shots.map(shot => shot.duration), [0, 7, 0]);
+    assert.equal(bulkResult.data.project.shots[0].actionDescription, 'Keep action');
+    assert.equal(bulkResult.data.project.shots[0].notes, 'Keep notes');
+    assert.equal(bulkResult.data.project.shots[1].generator, 'manual');
+    assert.equal((await request(bulkPath, 'PATCH', { shotIds: bulkIds, fields: { duration: 4, dialogue: 'Do not overwrite' } })).status, 400);
+    assert.equal((await request(bulkPath, 'PATCH', { shotIds: bulkIds, fields: { duration: -1 } })).status, 400);
+    assert.equal((await request(bulkPath, 'PATCH', { shotIds: [], fields: { duration: 4 } })).status, 400);
+    assert.equal((await request(bulkPath, 'PATCH', { shotIds: [...bulkIds, 'missing-shot'], fields: { duration: 4 } })).status, 404);
+    assert.equal((await request(`/api/projects/${bulkProject.id}`)).data.shots[0].duration, 0);
+    const bulkSnapshot = bulkResult.data.project;
+    await request(`/api/projects/${bulkProject.id}/shots/${bulkIds[0]}`, 'PATCH', { notes: 'Another editor changed this' });
+    assert.equal((await request(bulkPath, 'PATCH', { shotIds: bulkIds, fields: { duration: 4 }, updatedAt: bulkSnapshot.updatedAt, contentRevision: bulkSnapshot.contentRevision })).status, 409);
     const diagram = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
     const diagramForm = new FormData();
     diagramForm.append('file', new Blob([diagram], { type: 'image/png' }), 'diagram.png');
