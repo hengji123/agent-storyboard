@@ -6,7 +6,11 @@
 
 在 PowerShell 运行 `./start-local.ps1`，或在本目录运行 `npm start`。
 打开 http://127.0.0.1:43218 。前台启动时按 Ctrl+C 停止。
-项目及素材保存在本目录 `data/`，已由原项目忽略规则排除在 Git 外。备份时请单独备份整个 data 目录。
+新建项目时可填写已有项目文件夹的绝对路径。该项目的 project.json、DESIGN.md、media（含配音）和 generation 均保存在 `<项目文件夹>/.agent-storyboard/<项目ID>/`，避免与原有脚本或其他分镜混用。
+中央 `data/projects.json` 只登记项目目录等索引信息；备份时需要同时保留中央索引及各项目的 .agent-storyboard 目录。
+留空时兼容原有存储方式，项目及素材仍保存在本目录 `data/`。旧项目不自动迁移。项目建立后不能通过普通编辑更改位置，以防路径改动导致数据分散。
+删除分镜项目仅清理该项目ID对应的数据子目录，不删除外层项目文件夹或其他脚本文件。
+通过 MCP 创建时传入 `projectFolder`，例如 `F:/视频项目/充电宝广告`；路径需预先存在且运行服务的账号拥有写入权限。项目目录在同一台电脑上，不能填写其他电脑的浏览器本地路径。
 部署过程中后台启动的日志存放在 `local-run/stdout.log` 和 `local-run/stderr.log`。
 未设置开机自启，未调用真实生图或配音服务。
 
@@ -14,7 +18,7 @@
 
 这是从上游 main ZIP 创建的本地独立 Git 仓库，基线为 package.json 0.8.0，未保留原仓库提交历史。
 `upstream` 指向 https://github.com/Yuuhann1999/agent-storyboard.git 。该 remote 仅作为来源记录；后续更新应在分支中比较合并，不要直接覆盖本地修改。
-没有创建 GitHub 云端仓库，也没有上传代码或项目数据。
+代码已同步到 https://github.com/hengji123/agent-storyboard ，配置为 origin。项目数据和运行日志没有上传。
 
 日常修改后运行 `npm run check` 和适用测试，再提交 Git。
 根目录服务与 public 是开发入口；功能变更需同步插件 app 副本，`tests/plugin-parity.test.mjs` 检查一致性。

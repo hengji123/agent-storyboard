@@ -446,6 +446,7 @@ function tools() {
       inputSchema: {
         type: "object",
         properties: {
+          projectFolder: { type: "string", description: "Absolute path to an existing project folder. Store storyboard, media, audio and generation files inside its .agent-storyboard subdirectory. Omit to use the workbench default storage." },
           title: { type: "string" },
           aspectRatio: { type: "string", enum: ASPECT_RATIOS },
           shots: { type: "array", items: shotSchema() },
@@ -752,7 +753,7 @@ async function callTool(id, params) {
     try {
       project = await requestJson(
         "/api/projects",
-        jsonOptions({ title: args.title, aspectRatio: args.aspectRatio, shots: args.shots }),
+        jsonOptions({ title: args.title, aspectRatio: args.aspectRatio, shots: args.shots, projectFolder: args.projectFolder }),
         requestArgs
       );
       if (args.designPath) project = await uploadDesign(project.id, args.designPath, requestArgs);

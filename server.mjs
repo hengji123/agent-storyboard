@@ -29,6 +29,7 @@ const dataDir = resolve(
 );
 const projectsDir = join(dataDir, "projects");
 const projectsFile = join(dataDir, "projects.json");
+const projectFolders = new Map();
 const legacyDataFile = join(dataDir, "storyboard.json");
 const legacyMediaDir = join(dataDir, "media");
 const port = Number(args.port || process.env.PORT || process.env.AGENT_STORYBOARD_PORT || 43218);
@@ -126,6 +127,11 @@ function parseArgs(argv) {
 
 await mkdir(projectsDir, { recursive: true });
 await migrateLegacyProject();
+for (const record of (await readProjectsIndex()).projects) {
+  if (record.projectFolder && safeId(record.id) && isAbsolute(record.projectFolder)) {
+    projectFolders.set(record.id, resolve(record.projectFolder));
+  }
+}
 
 function sendJson(response, status, value) {
   response.writeHead(status, {
@@ -257,6 +263,7 @@ function normalizeProject(project = {}) {
   return {
     id: String(project.id || createId("project")),
     title: String(project.title || "未命名项目").trim() || "未命名项目",
+    projectFolder: projectFolders.get(String(project.id)) || "",
     aspectRatio: normalizeAspectRatio(project.aspectRatio),
     scriptDraft: String(project.scriptDraft || ""),
     audio: project.audio && typeof project.audio === "object" ? project.audio : { takes: [], selectedId: "", status: "idle" },
@@ -269,6 +276,9 @@ function normalizeProject(project = {}) {
 }
 
 function projectDir(projectId) {
+  if (!safeId(projectId)) throw Object.assign(new Error("Invalid project ID"), { status: 400 });
+  const folder = projectFolders.get(projectId);
+  if (folder) return join(folder, ".agent-storyboard", projectId);
   return join(projectsDir, projectId);
 }
 
@@ -320,6 +330,7 @@ async function saveProject(project) {
   const index = await readProjectsIndex();
   const record = {
     id: next.id,
+    projectFolder: next.projectFolder,
     title: next.title,
     aspectRatio: next.aspectRatio,
     hasDesign: next.hasDesign,
@@ -693,7 +704,9 @@ function generationTask(project, item, type = "shot") {
   const isCover = type === "cover";
   const coverSpec = isCover ? coverRatios[item.type] || coverRatios.vertical : null;
   const dimensions = isCover ? coverSpec : aspectRatios[project.aspectRatio];
-  const taskOutputDir = resolve(dataDir, "generation", project.id, item.generationTaskId);
+  const taskOutputDir = projectFolders.has(project.id)
+    ? join(projectDir(project.id), "generation", item.generationTaskId)
+    : resolve(dataDir, "generation", project.id, item.generationTaskId);
   const shotIndex = isCover ? 0 : project.shots.findIndex((shot) => shot.id === item.id) + 1;
   const referenceFileName = isCover && item.referenceUrl
     ? basename(decodeURIComponent(String(item.referenceUrl).split("/").pop() || ""))
@@ -1017,13 +1030,28 @@ async function handleProjectsApi(request, response, url) {
 
   if (request.method === "POST" && url.pathname === "/api/projects") {
     const body = await readBody(request);
+    const id = createId("project");
+    if (body.projectFolder !== undefined && body.projectFolder !== "") {
+      if (typeof body.projectFolder !== "string" || !isAbsolute(body.projectFolder.trim())) {
+        return sendError(response, 400, "项目文件夹必须是本机绝对路径");
+      }
+      const folder = resolve(body.projectFolder.trim());
+      const info = await stat(folder).catch(() => null);
+      if (!info?.isDirectory()) return sendError(response, 400, "项目文件夹不存在，请先创建文件夹");
+      projectFolders.set(id, folder);
+    }
     const project = normalizeProject({
-      id: createId("project"),
+      id,
       title: body.title,
       aspectRatio: body.aspectRatio,
       shots: Array.isArray(body.shots) ? body.shots : []
     });
-    return sendJson(response, 201, await saveProject(project));
+    try {
+      return sendJson(response, 201, await saveProject(project));
+    } catch (error) {
+      projectFolders.delete(id);
+      throw error;
+    }
   }
 
   const designMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/design$/);
@@ -1129,6 +1157,7 @@ async function handleProjectsApi(request, response, url) {
     const index = await readProjectsIndex();
     index.projects = index.projects.filter((item) => item.id !== projectId);
     await saveProjectsIndex(index);
+    projectFolders.delete(projectId);
     return sendJson(response, 200, { deleted: project.id });
   }
 

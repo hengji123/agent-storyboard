@@ -803,7 +803,9 @@ function openProjectDialog(mode, target = null) {
   projectNameInput.value = target?.title || "";
   ratioOptions.hidden = mode === "rename";
   projectDesignOption.hidden = mode === "rename";
+  document.querySelector("#project-folder-option").hidden = mode === "rename";
   if (mode === "create") {
+    document.querySelector("#project-folder-input").value = "";
     ratioOptions.querySelector('input[value="9:16"]').checked = true;
     pendingProjectDesign = null;
     projectDesignUpload.value = "";
@@ -2705,10 +2707,17 @@ projectForm.addEventListener("submit", async (event) => {
 
   if (dialogMode === "create") {
     const aspectRatio = new FormData(projectForm).get("aspectRatio");
-    const created = await api("/api/projects", {
-      method: "POST",
-      body: JSON.stringify({ title, aspectRatio })
-    });
+    const projectFolder = document.querySelector("#project-folder-input").value.trim();
+    let created;
+    try {
+      created = await api("/api/projects", {
+        method: "POST",
+        body: JSON.stringify({ title, aspectRatio, projectFolder })
+      });
+    } catch (error) {
+      showToast(error.message, "error");
+      return;
+    }
     projectDialog.close();
     if (pendingProjectDesign) {
       try {
