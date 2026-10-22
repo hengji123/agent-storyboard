@@ -26,9 +26,11 @@
 
 ## MCP 接入
 
-`mcp.local.example.json` 提供指向本地源码的配置片段，供支持 MCP 的客户端合并使用；尚未写入全局客户端配置。
-该配置让 MCP 连接此部署的 HTTP 服务，因此先启动本地服务。
-导入配置并重新加载客户端后，应检查 open_storyboard、create_storyboard_project 等工具是否可见。
+已通过 `codex mcp add agent-storyboard-local` 注册到当前 CODEX_HOME 的全局配置，使用本地 Node 绝对路径和修改过的 MCP 源码。原配置已在原目录留有带时间戳的备份。
+全局连接设置 AGENT_STORYBOARD_DATA_DIR 和 AGENT_STORYBOARD_PORT；服务未运行时，MCP 可以按原项目逻辑启动插件内同步的服务副本。已有服务运行时直接连接。
+已验证 initialize、tools/list 和 list_storyboard_projects，15 个工具可用，创建工具包含 projectFolder 参数。验证未修改任何项目。
+重新打开 Codex 后在新聊天检查 open_storyboard、create_storyboard_project 等工具是否可见。旧聊天中的工具列表不会因配置写入而自动保证更新。
+`mcp.local.example.json` 仍保留为通用 JSON 客户端配置示例；该示例显式指定服务 URL，使用时需先启动 HTTP 服务。Codex 实际配置使用 TOML，不要把此 JSON 直接粘贴进 TOML。
 
 ## 自有 Skill 配合入口
 
