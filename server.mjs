@@ -1,6 +1,7 @@
 import { defaultDataDir } from "./env-compat.mjs";
 import { createServer } from "node:http";
 import { expireTasks } from "./task-state.mjs";
+import { loadVoiceSettings, normalizeVoiceSettings, publicVoiceSettings, inspectVoiceProvider } from './voice-provider.mjs';
 import { inspectEnvironment } from "./runtime.mjs";
 import { generateVoice, alignVoice, transcribeReference } from "./audio.mjs";
 import { spokenText, dialogueKey, applyTiming, voiceTextsMatch } from "./timing.mjs";
@@ -29,6 +30,7 @@ const dataDir = resolve(
 );
 const projectsDir = join(dataDir, "projects");
 const projectsFile = join(dataDir, "projects.json");
+const voiceSettingsFile = join(dataDir, 'voice-settings.json');
 const projectFolders = new Map();
 const legacyDataFile = join(dataDir, "storyboard.json");
 const legacyMediaDir = join(dataDir, "media");
@@ -1452,6 +1454,21 @@ async function handleGenerationApi(request, response, url) {
 }
 
 async function handleApi(request, response, url) {
+  if (url.pathname === '/api/voice/settings') {
+    const current = await loadVoiceSettings(voiceSettingsFile);
+    if (request.method === 'GET') return sendJson(response, 200, publicVoiceSettings(current));
+    if (request.method === 'POST') {
+      try {
+        const settings = normalizeVoiceSettings(await readBody(request), current);
+        await atomicJson(voiceSettingsFile, settings);
+        return sendJson(response, 200, publicVoiceSettings(settings));
+      } catch (error) { return sendError(response, 400, error.message); }
+    }
+  }
+  if (url.pathname === '/api/voice/test' && request.method === 'POST') {
+    try { return sendJson(response, 200, await inspectVoiceProvider(await loadVoiceSettings(voiceSettingsFile))); }
+    catch (error) { return sendError(response, 400, error.message); }
+  }
   const audioReferenceMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/audio\/reference$/);
   if (audioReferenceMatch) {
     const projectId = decodeURIComponent(audioReferenceMatch[1]);
@@ -1517,6 +1534,8 @@ async function handleApi(request, response, url) {
     if (!text || text.length > 10000) return sendError(response, 400, "请填写台词或脚本，最多 10000 字");
     const id = createId("voice");
     const instruction = String(body.instruction || "").slice(0, 1000);
+    const voiceSettings = await loadVoiceSettings(voiceSettingsFile);
+    if (voiceSettings.provider !== 'voxcpm' && !voiceSettings.token) return sendError(response, 400, '请先在配音服务设置中填写访问令牌并保存');
     const reference = project.audio.reference;
     const referenceFileName = basename(String(reference?.fileName || ""));
     const referencePath = referenceFileName ? join(projectMediaDir(projectId), referenceFileName) : null;
@@ -1536,7 +1555,7 @@ async function handleApi(request, response, url) {
     }).catch(() => {});
     void (async () => {
       // 没填参考音频原文时，用本地 Whisper 识别一份：有原文，音色还原度明显更高。
-      if (referencePath && !usedPromptText.trim()) {
+      if (referencePath && !usedPromptText.trim() && voiceSettings.provider === 'voxcpm') {
         usedPromptText = (await transcribeReference(referencePath)).slice(0, 1000);
         if (usedPromptText) {
           await serializeApi(async () => {
@@ -1552,6 +1571,7 @@ async function handleApi(request, response, url) {
         id,
         text,
         instruction,
+        voiceSettings,
         promptWav: referencePath,
         promptText: usedPromptText,
         onProgress: (done, total) => setProgress({ done, total })
@@ -1566,6 +1586,8 @@ async function handleApi(request, response, url) {
         instruction,
         referenceFileName,
         referenceText: usedPromptText,
+        provider: voiceSettings.provider,
+        modelId: voiceSettings.modelId,
         createdAt: new Date().toISOString()
       });
       current.audio.selectedId = id;
@@ -1584,7 +1606,7 @@ async function handleApi(request, response, url) {
     return sendJson(response, 202, saved);
   }
   if (request.method === "GET" && url.pathname === "/api/environment") {
-    return sendJson(response, 200, await inspectEnvironment());
+    return sendJson(response, 200, await inspectEnvironment(await loadVoiceSettings(voiceSettingsFile)));
   }
   if (request.method === "GET" && url.pathname === "/api/health") {
     return sendJson(response, 200, {

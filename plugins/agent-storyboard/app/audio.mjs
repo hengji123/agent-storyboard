@@ -2,7 +2,8 @@ import { readFile, writeFile, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { run, ffmpeg, ffprobe, whisper, whisperModel } from "./runtime.mjs";
-import { generateVoxcpm } from "./voxcpm.mjs";
+import { defaultVoiceSettings, prepareVoiceProvider, synthesizeVoice } from "./voice-provider.mjs";
+import { voxcpmBase } from './voxcpm.mjs';
 import { matchRecognition } from "./recognition.mjs";
 
 async function verifyVoiceRuntime() {
@@ -101,13 +102,14 @@ export async function transcribeReference(path) {
   }
 }
 
-async function synthesizeChunk(chunk, index, { directory, id, instruction, promptWav, promptText }) {
+async function synthesizeChunk(chunk, index, { directory, id, instruction, promptWav, promptText, voiceSettings }) {
   const raw = join(directory, `${id}-c${index}.raw`);
   const wav = join(directory, `${id}-c${index}.wav`);
   let lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const attempts = voiceSettings.provider === 'voxcpm' ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      await generateVoxcpm({ text: chunk.text, output: raw, instruction, promptWav, promptText });
+      await synthesizeVoice(voiceSettings, { text: chunk.text, output: raw, instruction, promptWav, promptText });
       // 每段单独做响度归一，拼接后音量才不会忽大忽小
       // 修掉每段首尾模型自带的静音，再做响度归一，拼接后音量才一致、接缝处停顿才可控
       const trim = "silenceremove=start_periods=1:start_silence=0.03:start_threshold=-48dB,areverse,silenceremove=start_periods=1:start_silence=0.03:start_threshold=-48dB,areverse";
@@ -122,8 +124,15 @@ async function synthesizeChunk(chunk, index, { directory, id, instruction, promp
   throw new Error(`第 ${index + 1} 段配音失败（“${chunk.text.slice(0, 16)}…”）：${lastError.message}`);
 }
 
-export async function generateVoice({ directory, id, text, instruction, promptWav, promptText, onProgress }) {
+export async function generateVoice({ directory, id, text, instruction, promptWav, promptText, onProgress, voiceSettings }) {
+  voiceSettings ||= { ...defaultVoiceSettings, baseUrl: voxcpmBase() };
   const output = join(directory, `${id}.wav`);
+  if (voiceSettings.provider !== 'voxcpm') {
+    const settings = await prepareVoiceProvider(voiceSettings, { promptWav, promptText });
+    const result = await synthesizeVoice(settings, { text, output, instruction, promptText });
+    onProgress?.(1, 1);
+    return { fileName: `${id}.wav`, durationMs: result.durationMs, chunkCount: 1 };
+  }
   const temporary = [];
   let convertedPromptWav = null;
   try {
@@ -136,10 +145,11 @@ export async function generateVoice({ directory, id, text, instruction, promptWa
     }
     const chunks = splitVoiceText(text);
     if (!chunks.length) throw new Error("没有可配音的文字");
+    const preparedSettings = await prepareVoiceProvider(voiceSettings, { promptWav: promptForVoice, promptText });
     const parts = [];
     for (const [index, chunk] of chunks.entries()) {
       const wav = await synthesizeChunk(chunk, index, {
-        directory, id, instruction,
+        directory, id, instruction, voiceSettings: preparedSettings,
         promptWav: promptForVoice ? String(promptForVoice) : "",
         promptText: String(promptText || "")
       });

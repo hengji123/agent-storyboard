@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { voxcpmBase } from "./voxcpm.mjs";
+import { inspectVoiceProvider } from './voice-provider.mjs';
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL(".", import.meta.url));
 export const runtimeHome = process.env.AGENT_STORYBOARD_RUNTIME || join(root, ".runtime-voice");
@@ -64,18 +65,19 @@ async function probe(command, args, timeout = 5000) {
 }
 const firstLine = (text) => text.split(/\r?\n/).find(Boolean)?.slice(0, 80) || "";
 
-async function voiceServiceReachable() {
+async function voiceServiceReachable(settings) {
   try {
-    const response = await fetch(`${voxcpmBase()}/config`, { signal: AbortSignal.timeout(4000) });
+    if (settings && settings.provider !== 'voxcpm') return (await inspectVoiceProvider(settings)).ok;
+    const response = await fetch(`${settings?.baseUrl || voxcpmBase()}/config`, { signal: AbortSignal.timeout(4000) });
     return response.ok;
   } catch { return false; }
 }
 
 // 只列用户真正需要关心的东西：状态 ready（正常）/ missing（需要处理）/ info（未检测到，但不影响使用）。
 // Node、配音客户端这类已经内置的东西不再检查；Remotion、HyperFrames 属于 Agent 自己的能力，不是本机环境。
-export async function inspectEnvironment() {
+export async function inspectEnvironment(voiceSettings) {
   const [voiceOnline, ffmpegProbe, ffprobeProbe, whisperProbe, codex, codexLogin, claude] = await Promise.all([
-    voiceServiceReachable(),
+    voiceServiceReachable(voiceSettings),
     probe(ffmpeg, ["-version"]),
     probe(ffprobe, ["-version"]),
     probe(whisper, ["--help"]),
@@ -94,11 +96,11 @@ export async function inspectEnvironment() {
       title: "配音",
       items: [
         voiceOnline
-          ? { id: "voice-service", name: "配音服务", status: "ready", detail: "VoxCPM 在线服务已连接" }
-          : { id: "voice-service", name: "配音服务", status: "missing", detail: "无法连接 VoxCPM 在线服务，请检查网络" },
+          ? { id: "voice-service", name: "配音服务", status: "ready", detail: `${voiceSettings?.provider?.startsWith('yovoice') ? 'Yovoice' : 'VoxCPM'} 服务已连接` }
+          : { id: "voice-service", name: "配音服务", status: "missing", detail: "无法连接所选配音服务，请在配音服务设置中检查地址、令牌和接口开关" },
         ffmpegReady
           ? { id: "ffmpeg", name: "FFmpeg", status: "ready", detail: firstLine(ffmpegProbe.output).replace(/ Copyright.*/, "") }
-          : { id: "ffmpeg", name: "FFmpeg", status: "missing", detail: "未检测到 FFmpeg 或 FFprobe：配音转码和时长读取需要它。macOS：brew install ffmpeg" },
+          : { id: "ffmpeg", name: "FFmpeg", status: voiceSettings?.provider?.startsWith('yovoice') ? "info" : "missing", detail: "未检测到 FFmpeg 或 FFprobe。Yovoice 生成不依赖它；VoxCPM 转码和 Whisper 对齐需要它。" },
         whisperReady
           ? { id: "whisper", name: "台词对齐（Whisper）", status: "ready", detail: "已就绪" }
           : { id: "whisper", name: "台词对齐（Whisper）", status: "missing", detail: !whisperProbe.ok ? "未检测到 whisper-cli：用于把配音对齐到镜头台词，没有它仍可生成配音。macOS：brew install whisper-cpp" : `缺少识别模型：${whisperModel}` }

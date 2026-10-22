@@ -302,6 +302,26 @@
               <span class="voice-compose-chevron" aria-hidden="true"></span>
             </summary>
             <div class="voice-compose-body">
+              <fieldset class="voice-service-settings">
+                <legend>配音服务（此工作台共用）</legend>
+                <label class="voice-field"><span>调用方式</span>
+                  <select id="voice-provider">
+                    <option value="yovoice-local">本地 Yovoice</option>
+                    <option value="yovoice-api">远程 Yovoice API</option>
+                    <option value="voxcpm">VoxCPM 在线服务（原方式）</option>
+                  </select>
+                </label>
+                <label class="voice-field"><span>服务地址</span><input id="voice-service-url" placeholder="http://127.0.0.1:8080/v1" autocomplete="off" /></label>
+                <label class="voice-field" id="voice-token-field"><span>访问令牌</span><input id="voice-service-token" type="password" autocomplete="new-password" placeholder="粘贴 Yovoice 设置中的访问令牌" /><small>仅保存在本机配置文件中，不写入项目或 Git；已保存时留空保留原令牌。</small></label>
+                <div id="voice-yovoice-options">
+                  <label class="voice-field"><span>模型 ID</span><input id="voice-service-model" list="voice-model-options" placeholder="测试连接后选择；留空使用 Yovoice 默认模型" /><datalist id="voice-model-options"></datalist></label>
+                  <label class="voice-field"><span>音色 ID</span><input id="voice-service-voice" list="voice-saved-options" placeholder="已有音色 ID；留空可使用下方参考音频" /><datalist id="voice-saved-options"></datalist></label>
+                  <label class="voice-field"><span>预设说话人（可选）</span><input id="voice-service-speaker" placeholder="仅用于支持内置说话人的模型" /></label>
+                </div>
+                <div class="voice-actions"><button id="voice-service-save" type="button" class="secondary">保存配音设置</button><button id="voice-service-test" type="button" class="secondary">测试连接 / 读取模型音色</button></div>
+                <p id="voice-service-status" role="status" aria-live="polite">正在读取设置…</p>
+                <small>本地 Yovoice 需开启「本机接口」，保持应用运行。远程 API 使用 Yovoice 协议。上传的参考音频会导入所选服务；填写已有音色 ID 时优先使用该音色。</small>
+              </fieldset>
               <div class="voice-compose-heading">
                 <p>可选地描述声音，或上传一段参考音频。</p>
                 <button id="voice-generate" class="primary" type="button">生成配音</button>
@@ -319,7 +339,7 @@
                     <span id="voice-reference-name" class="voice-reference-name" aria-live="polite">未上传参考音频</span>
                   </div>
                   <audio id="voice-reference-player" controls preload="metadata" hidden aria-label="试听参考音频"></audio>
-                  <small class="voice-field-hint">支持 WAV、MP3、M4A。建议 10 到 20 秒、单人、安静环境的清晰人声。长文案会自动按句子分段生成，每段都以这份参考音频为准，音色不会越往后越偏。参考音频原文留空时会用本地 Whisper 自动识别。</small>
+                  <small class="voice-field-hint">支持 WAV、MP3、M4A。建议 10 到 20 秒、单人、安静环境的清晰人声。Yovoice 参考音频需为 1–60 秒；需要原文的模型请填写准确原文。Yovoice 使用其自身生成流程，VoxCPM 长文案按句尾分段。</small>
                 </div>
               </div>
               <label class="voice-field">

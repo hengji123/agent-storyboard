@@ -28,6 +28,14 @@ test("project persistence, conflict detection, generation cancellation and recov
     let { data: project } = await request("/api/projects", "POST", { title: "Integration", shots: [{ dialogue: "hello", visualPrompt: "rain", generator: "image-gen" }] });
     const path = `/api/projects/${project.id}`;
     const original = structuredClone(project);
+    const configuredVoice = await request('/api/voice/settings', 'POST', { provider: 'yovoice-local', baseUrl: 'http://127.0.0.1:8080/v1', token: 'test-private-key', modelId: 'test-model' });
+    assert.equal(configuredVoice.status, 200);
+    assert.equal(configuredVoice.data.token, undefined);
+    assert.equal(configuredVoice.data.hasToken, true);
+    assert.equal((await request('/api/voice/settings')).data.token, undefined);
+    assert.equal((await request('/api/voice/settings', 'POST', { baseUrl: 'http://127.0.0.1:8081/v1', token: '' })).data.hasToken, false);
+    assert.equal((await request('/api/voice/settings', 'POST', { baseUrl: 'not a URL' })).status, 400);
+    await request('/api/voice/settings', 'POST', { provider: 'voxcpm', baseUrl: 'http://127.0.0.1:1', token: '', modelId: '', voiceId: '' });
     project.scriptDraft = "persistent draft";
     project = (await request(path, "PUT", project)).data;
     assert.equal((await request(path)).data.scriptDraft, "persistent draft");

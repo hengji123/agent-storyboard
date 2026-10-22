@@ -1,5 +1,7 @@
 .DS_Store
 local-run/
+data/voice-settings.json
+data/voice-settings.json.*.tmp
 node_modules/
 .venv-voice/
 .runtime-voice/

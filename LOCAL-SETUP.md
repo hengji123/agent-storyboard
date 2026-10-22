@@ -32,6 +32,19 @@
 重新打开 Codex 后在新聊天检查 open_storyboard、create_storyboard_project 等工具是否可见。旧聊天中的工具列表不会因配置写入而自动保证更新。
 `mcp.local.example.json` 仍保留为通用 JSON 客户端配置示例；该示例显式指定服务 URL，使用时需先启动 HTTP 服务。Codex 实际配置使用 TOML，不要把此 JSON 直接粘贴进 TOML。
 
+## 配音服务选择
+
+在项目「脚本」页面展开「生成新版本」，配置此工作台共用的配音服务：
+
+- 本地 Yovoice：默认地址 `http://127.0.0.1:8080/v1`。在 Yovoice 设置开启本机接口，将访问令牌粘贴进分镜台，保存并测试连接。
+- 远程 Yovoice API：使用相同的 `/v1` 协议，填写 HTTPS 地址及对应访问令牌。暂未接入其他厂商的 TTS API 协议。
+- VoxCPM 在线服务：保留原 Gradio 调用方式。
+
+测试连接会读取已安装模型和已有音色，可选填模型 ID、音色 ID及预设说话人。留空模型时使用服务默认模型。音色 ID 优先；未填写音色 ID 时，上传的参考音频会导入 Yovoice 的音色库。不同模型对原文、说话人及声音描述有不同要求，以实际模型为准。
+Yovoice 使用异步任务并下载 WAV，可直接生成配音，无需本机 FFmpeg；Whisper 台词对齐仍需独立的 FFmpeg 和 Whisper 环境。VoxCPM 仍沿用分段及 FFmpeg 转码流程。
+全局设置保存在 `data/voice-settings.json`，访问令牌为本机文件中的明文；该文件及其临时文件已加入 Git 忽略，不写进分镜项目，不由设置读取接口返回。切换地址或服务时不会自动把旧令牌发送给新服务。
+当前尚未提供其他云端厂商的通用 TTS 适配。接口由截图所示的本地 `/docs/openapi.json` 和 [Yovoice 官方协议](https://github.com/leemysw/yovoice/blob/main/docs/api.md) 核对。
+
 ## 自有 Skill 配合入口
 
 当前只准备部署与配置入口，尚未增加新的生成器类型。

@@ -2489,6 +2489,13 @@ function startPolling() {
 
 renderRatioOptions();
 function renderVoice() {
+  if (!voiceSettingsLoading) {
+    voiceSettingsLoading = true;
+    loadVoiceServiceSettings().catch(error => {
+      voiceSettingsLoading = false;
+      document.querySelector('#voice-service-status').textContent = error.message;
+    });
+  }
   const audio = project?.audio || { takes: [] };
   const takes = Array.isArray(audio.takes) ? audio.takes : [];
   const takeIndex = takes.findIndex(item => item.id === audio.selectedId);
@@ -2582,8 +2589,73 @@ async function voiceAction(action, payload = {}) {
     renderStoryboard();
   } catch (error) { showToast(error.message, "error"); }
 }
-document.querySelector("#voice-generate").addEventListener("click", () => {
-  if (!confirm("将镜头台词（无台词时使用脚本）以及已上传的参考音频（如有）发送到 VoxCPM 在线服务生成配音，继续？")) return;
+let voiceSettingsLoading = false;
+let savedVoiceService = null;
+function updateVoiceServiceFields() {
+  const provider = document.querySelector('#voice-provider').value;
+  document.querySelector('#voice-token-field').hidden = provider === 'voxcpm';
+  document.querySelector('#voice-yovoice-options').hidden = provider === 'voxcpm';
+}
+async function loadVoiceServiceSettings() {
+  const settings = await api('/api/voice/settings');
+  savedVoiceService = settings;
+  document.querySelector('#voice-provider').value = settings.provider;
+  document.querySelector('#voice-service-url').value = settings.baseUrl;
+  document.querySelector('#voice-service-model').value = settings.modelId;
+  document.querySelector('#voice-service-voice').value = settings.voiceId;
+  document.querySelector('#voice-service-speaker').value = settings.speaker;
+  document.querySelector('#voice-service-token').placeholder = settings.hasToken ? '令牌已保存，留空保持不变' : '粘贴 Yovoice 设置中的访问令牌';
+  document.querySelector('#voice-service-status').textContent = '设置已读取；可测试连接后选择模型和音色。';
+  updateVoiceServiceFields();
+}
+async function saveVoiceServiceSettings() {
+  const settings = {
+    provider: document.querySelector('#voice-provider').value,
+    baseUrl: document.querySelector('#voice-service-url').value,
+    token: document.querySelector('#voice-service-token').value,
+    modelId: document.querySelector('#voice-service-model').value,
+    voiceId: document.querySelector('#voice-service-voice').value,
+    speaker: document.querySelector('#voice-service-speaker').value
+  };
+  savedVoiceService = await api('/api/voice/settings', { method: 'POST', body: JSON.stringify(settings) });
+  document.querySelector('#voice-service-token').value = '';
+  document.querySelector('#voice-service-token').placeholder = savedVoiceService.hasToken ? '令牌已保存，留空保持不变' : '粘贴 Yovoice 设置中的访问令牌';
+  document.querySelector('#voice-service-status').textContent = '配音设置已保存。';
+  return savedVoiceService;
+}
+document.querySelector('#voice-provider').addEventListener('change', () => {
+  const provider = document.querySelector('#voice-provider').value;
+  document.querySelector('#voice-service-url').value = provider === 'voxcpm' ? 'https://voxcpm.modelbest.cn' : provider === 'yovoice-local' ? 'http://127.0.0.1:8080/v1' : '';
+  for (const id of ['voice-service-token', 'voice-service-model', 'voice-service-voice', 'voice-service-speaker']) document.querySelector('#' + id).value = '';
+  document.querySelector('#voice-service-token').placeholder = '填写该服务的访问令牌';
+  for (const id of ['voice-model-options', 'voice-saved-options']) document.querySelector('#' + id).replaceChildren();
+  updateVoiceServiceFields();
+});
+document.querySelector('#voice-service-save').addEventListener('click', async () => {
+  try { await saveVoiceServiceSettings(); } catch (error) { document.querySelector('#voice-service-status').textContent = error.message; }
+});
+document.querySelector('#voice-service-test').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await saveVoiceServiceSettings();
+    document.querySelector('#voice-service-status').textContent = '正在检查连接…';
+    const result = await api('/api/voice/test', { method: 'POST', body: '{}' });
+    const models = result.models?.installed || [];
+    const voices = Array.isArray(result.voices) ? result.voices : result.voices?.voices || [];
+    for (const [target, items] of [['voice-model-options', models], ['voice-saved-options', voices]]) {
+      const options = items.map(item => { const option = document.createElement('option'); option.value = item.id; option.label = item.name || item.id; return option; });
+      document.querySelector('#' + target).replaceChildren(...options);
+    }
+    document.querySelector('#voice-service-status').textContent = `${result.message}；已安装模型 ${models.length} 个，已有音色 ${voices.length} 个。`;
+  } catch (error) { document.querySelector('#voice-service-status').textContent = error.message; }
+  finally { button.disabled = false; }
+});
+document.querySelector("#voice-generate").addEventListener("click", async () => {
+  let settings;
+  try { settings = await saveVoiceServiceSettings(); } catch (error) { showToast(error.message, 'error'); return; }
+  const destination = settings.provider === 'yovoice-local' ? '本机 Yovoice' : settings.provider === 'yovoice-api' ? '远程 Yovoice API' : 'VoxCPM 在线服务';
+  if (!confirm(`将台词和参考音频（如有）发送到${destination}（${settings.baseUrl}）生成配音，继续？`)) return;
   voiceAction("generate", {
     instruction: document.querySelector("#voice-instruction").value,
     referenceText: document.querySelector("#voice-reference-text").value
