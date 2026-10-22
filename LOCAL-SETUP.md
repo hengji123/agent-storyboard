@@ -47,6 +47,21 @@ Yovoice 使用异步任务并下载 WAV，可直接生成配音，无需本机 F
 
 ## 自有 Skill 配合入口
 
+### 导演分镜字段与布局
+
+分镜表合并为六列：镜号、镜头信息（类型/媒体/时长/生成方式）、旁白/对白、画面与导演设计、成品参考/素材、操作。
+每镜「导演详情」可展开动作、调度图、调度说明和制作备注。详情有独立滚动区域，避免长文或大图无限拉长镜头行；窄窗口自动改为卡片。
+
+- `visualPrompt`：成品静态画面与生成提示词。
+- `actionDescription`：起始状态、主体动作与视线、动作节奏、结束状态。
+- `blockingDescription`：机位/朝向、人物与关键物位置、路线、轴线及调度图提示词。
+- `blockingImageUrl`：由服务管理的独立调度图地址，不与成品素材的 `mediaUrl` 混用。
+- `notes`：制作备注、资产索引、跨镜连续性。
+
+通过 create/update MCP 工具写入动作与调度文字；生成调度图后调用 `manage_storyboard_blocking_image`，传 `projectId`、`shotId`、`action: attach` 及本机 `sourcePath`。`action: remove` 移除调度图。
+图像支持 PNG/JPEG/WebP/GIF，大小上限 20 MB；文件与项目素材保存在一起，重排不改变调度图关联。复制镜头保留文字，清空图像引用，避免删除其中一镜破坏另一镜。
+搜索覆盖动作和调度说明。Markdown、纯文本、HTML、Word 导出包含相应文字；Word 嵌入调度图，HTML/Markdown 的图链接依赖本地服务仍可访问。
+
 当前只准备部署与配置入口，尚未增加新的生成器类型。
 
 1. storyboard-generator 产出台词、画面、时长，映射到 dialogue、visualPrompt、duration。

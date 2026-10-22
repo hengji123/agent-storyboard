@@ -369,7 +369,7 @@
       <div class="board-toolbar">
         <details class="pacing-panel"><summary id="pacing-summary">节奏检查</summary><ul id="pacing-results"></ul></details>
         <div class="board-tools">
-          <input id="shot-search" class="shot-search" type="search" placeholder="搜索台词 / 画面 / 备注" aria-label="搜索镜头" />
+          <input id="shot-search" class="shot-search" type="search" placeholder="搜索台词 / 画面 / 动作 / 调度" aria-label="搜索镜头" />
           <div class="density-toggle" role="group" aria-label="行高">
             <button type="button" data-density="comfortable" title="详细：显示完整文案和大预览">详细</button>
             <button type="button" data-density="compact" title="紧凑：一屏看更多镜头">紧凑</button>
@@ -380,27 +380,19 @@
       <table>
         <colgroup>
           <col class="col-index" />
-          <col class="col-roll" />
-          <col class="col-media" />
-          <col class="col-duration" />
+          <col class="col-shot-info" />
           <col class="col-dialogue" />
           <col class="col-visual" />
-          <col class="col-generator" />
           <col class="col-preview" />
-          <col class="col-notes" />
           <col class="col-actions" />
         </colgroup>
         <thead>
           <tr>
             <th>#</th>
-            <th>镜头</th>
-            <th>媒体</th>
-            <th>时长</th>
-            <th>台词文案</th>
-            <th>画面描述 / 生成提示词</th>
-            <th>生成方式</th>
-            <th>素材预览</th>
-            <th>备注</th>
+            <th>镜头信息</th>
+            <th>旁白 / 对白</th>
+            <th>画面与导演设计</th>
+            <th>成品参考 / 素材</th>
             <th></th>
           </tr>
         </thead>
@@ -458,17 +450,35 @@
         </button>
         <span class="pacing-flag" hidden>!</span>
       </td>
-      <td><div data-select-field="rollType"></div></td>
-      <td><div data-select-field="mediaType"></div></td>
-      <td>
+      <td class="shot-info-cell">
+        <div class="shot-info-fields">
+        <div data-select-field="rollType"></div>
+        <div data-select-field="mediaType"></div>
         <div class="duration-input">
           <input data-field="duration" type="number" min="0" step="0.5" />
           <span>秒</span>
         </div>
+        <div data-select-field="generator"></div>
+        </div>
       </td>
-      <td><textarea data-field="dialogue" placeholder="输入这一镜的台词"></textarea></td>
-      <td><textarea data-field="visualPrompt" placeholder="描述画面，也作为生成提示词"></textarea></td>
-      <td><div data-select-field="generator"></div></td>
+      <td class="shot-dialogue-cell"><textarea data-field="dialogue" aria-label="旁白或对白" placeholder="输入这一镜的旁白或对白"></textarea></td>
+      <td class="shot-director-cell">
+        <label class="shot-field"><span>静态画面 / 生成提示词</span><textarea data-field="visualPrompt" placeholder="主体、构图、景别、光影与风格"></textarea></label>
+        <p class="action-brief"></p>
+        <details class="shot-director-details">
+          <summary>导演详情 <span class="director-completeness"></span></summary>
+          <div class="director-detail-body">
+            <label class="shot-field"><span>动作描述</span><textarea data-field="actionDescription" placeholder="起始状态 → 主体动作与视线 → 节奏 → 结束状态"></textarea></label>
+            <section class="blocking-diagram">
+              <div class="blocking-heading"><strong>镜头调度图</strong><span>机位 · 站位 · 视线 · 路线 · 轴线</span></div>
+              <div class="blocking-image-slot"></div>
+              <div class="blocking-buttons"><button type="button" class="secondary compact-button blocking-upload">上传调度图</button><button type="button" class="secondary compact-button blocking-remove">移除</button><input type="file" class="blocking-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden /></div>
+              <label class="shot-field"><span>调度说明 / 调度图提示词</span><textarea data-field="blockingDescription" placeholder="机位与朝向、人物/关键物位置、移动路线及必要的起止状态"></textarea></label>
+            </section>
+            <label class="shot-field"><span>制作备注 / 跨镜连续性</span><textarea data-field="notes" placeholder="与前后镜的衔接、资产引用、连续性与制作注意事项"></textarea></label>
+          </div>
+        </details>
+      </td>
       <td class="preview-cell">
         <div class="preview-stack">
           <div class="preview-slot"></div>
@@ -478,7 +488,6 @@
           </div>
         </div>
       </td>
-      <td><textarea data-field="notes" placeholder="补充说明"></textarea></td>
       <td class="row-actions-cell"><button class="row-menu" type="button" aria-label="镜头操作" aria-haspopup="menu" title="镜头操作">
         <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="3.5" cy="9" r="1.4"/><circle cx="9" cy="9" r="1.4"/><circle cx="14.5" cy="9" r="1.4"/></svg>
       </button></td>

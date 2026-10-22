@@ -261,6 +261,9 @@ function emptyShot() {
     duration: 5,
     dialogue: "",
     visualPrompt: "",
+    actionDescription: '',
+    blockingDescription: '',
+    blockingImageUrl: '',
     generator: "image-gen",
     mediaUrl: "",
     notes: "",
@@ -524,6 +527,9 @@ function buildMarkdownExport() {
       "",
       textBlock(shot.visualPrompt),
       "",
+      '**动作描述**', '', textBlock(shot.actionDescription), '',
+      '**镜头调度**', '', textBlock(shot.blockingDescription), '',
+      ...(shot.blockingImageUrl ? [`![镜头调度图](${new URL(shot.blockingImageUrl, location.origin).href})`, ''] : []),
       "**备注**",
       "",
       textBlock(shot.notes),
@@ -552,7 +558,7 @@ function buildHtmlExport() {
         <td class="type">${escapeHtml(shot.rollType || "B-ROLL")}</td>
         <td class="duration">${Number(shot.duration || 0)}s</td>
         <td>${renderExportParagraph(shot.dialogue)}</td>
-        <td>${renderExportParagraph(shot.visualPrompt)}</td>
+        <td><strong>静态画面</strong><br>${renderExportParagraph(shot.visualPrompt)}<br><strong>动作描述</strong><br>${renderExportParagraph(shot.actionDescription)}<br><strong>镜头调度</strong><br>${renderExportParagraph(shot.blockingDescription)}${shot.blockingImageUrl ? `<br><img style="max-width:100%;max-height:240px;object-fit:contain" alt="镜头调度图" src="${escapeHtml(new URL(shot.blockingImageUrl, location.origin).href)}">` : ''}</td>
         <td>${renderExportParagraph(shot.notes)}</td>
       </tr>
     `).join("");
@@ -727,7 +733,7 @@ function buildHtmlExport() {
               <th class="type">类型</th>
               <th class="duration">时长</th>
               <th class="dialogue">口播/字幕</th>
-              <th class="visual">录屏/画面</th>
+              <th class="visual">画面 / 动作 / 调度</th>
               <th class="notes">备注</th>
             </tr>
           </thead>
@@ -1059,7 +1065,7 @@ function buildStoryboardPrompt() {
     "## 必须执行的写回流程",
     "1. 使用 get_storyboard_project 读取上述项目，确认项目 ID、画面比例、脚本和现有镜头。项目 ID 已提供时不要凭标题猜测另一个项目。",
     "2. 先在内部完成导演视角的语义拆镜和全片检查，不要把中间表格输出到聊天中。",
-    "3. 将每个镜头转换为项目支持的结构化字段：rollType、mediaType、duration、dialogue、visualPrompt、generator、notes。",
+    "3. 将每个镜头转换为项目支持的结构化字段：rollType、mediaType、duration、dialogue、visualPrompt、actionDescription、blockingDescription、generator、notes。调度图通过 manage_storyboard_blocking_image 独立回填。",
     "4. 使用一次 update_storyboard_project 把结果写回当前项目的“分镜”页：已有镜头按顺序用 shotUpdates 覆盖，镜头不足用 appendShots 追加；确实多出的旧镜头才放入 deleteShotIds。不要删除项目、脚本、设计文件或已有媒体文件。",
     "5. 写回后读取项目确认镜头数量和关键字段已经保存。不要调用 image-gen、hyperframes、remotion 或其他素材生成工具；这里的 generator 只是后续制作计划。",
     "6. 最终聊天回复不要输出完整视觉编排表；请报告写入了多少个镜头、全片检查结论、需要补充的素材、需要确认的视觉方向、制作难度较高的镜头和项目链接。",
@@ -1072,7 +1078,7 @@ function buildStoryboardPrompt() {
     "",
     "## 基础项目约束",
     `- 画面比例：${ratio}`,
-    "- 后续落地到 Agent 分镜台时，每个镜头需要能够明确映射到 rollType、mediaType、duration、dialogue、visualPrompt、generator、notes。",
+    "- 后续落地到 Agent 分镜台时，每个镜头需要明确映射到 rollType、mediaType、duration、dialogue、visualPrompt、actionDescription、blockingDescription、generator、notes。静态画面、动作与调度分别填写，不混入备注。",
     "- A-ROLL 用于真人口播或主讲；B-ROLL 用于画面补充、录屏、数据图、动画。",
     "- generator 只能使用 manual、image-gen、hyperframes、remotion。",
     "- visualPrompt 要能直接指导图片或视频素材生成。",
@@ -1116,9 +1122,9 @@ function buildStoryboardPrompt() {
     "- 镜头：从 S001 开始连续编号，写入 visualPrompt 或 notes 开头，保持和分镜顺序一致。",
     "- 时间：有时间轴时记录对应的开始/结束毫秒并将秒数写入 duration；无时间轴时 duration=0，并写“待录音后确定”。",
     "- 配音文案：原文完整保留到 dialogue，不要擅自改写。",
-    "- 画面类型、画面设计、动态变化：写入 visualPrompt，并使用“【画面类型】”“【画面设计】”“【动态变化】”标签。",
+    "- 画面类型与静态设计写入 visualPrompt；动态变化、主体动作、节奏及起止状态写入 actionDescription；机位、站位、路线与轴线写入 blockingDescription。",
     "- 画面衔接、需要补充的素材、需要确认的视觉方向、制作难度：写入 notes，并使用对应标签。",
-    "- visualPrompt 必须说明主体、构图、景别、关键元素、最终停留画面和可直接执行的画面动作。",
+    "- visualPrompt 说明主体、构图、景别、关键元素与成品视觉；actionDescription 单独写清本镜可执行动作、视线、节奏和起止状态。",
     "- notes 必须保留前后镜头如何通过主体、动作、方向、位置、颜色或意义衔接；不要只写“淡入淡出”。",
     "",
     "填写要求：",
@@ -2087,6 +2093,65 @@ function attachRowDrag(row, shot) {
   });
 }
 
+const openDirectorShots = new Set();
+function updateDirectorSummary(row, shot) {
+  row.querySelector('.action-brief').textContent = shot.actionDescription ? `动作：${shot.actionDescription}` : '动作待设计';
+  row.querySelector('.director-completeness').textContent = `${shot.actionDescription ? '动作已写' : '缺动作'} · ${shot.blockingImageUrl ? '调度图已上传' : '缺调度图'}`;
+}
+function setupBlockingDiagram(row, shot) {
+  const details = row.querySelector('.shot-director-details');
+  details.open = openDirectorShots.has(shot.id);
+  details.addEventListener('toggle', () => {
+    if (details.open) openDirectorShots.add(shot.id); else openDirectorShots.delete(shot.id);
+    row.classList.toggle('director-open', details.open);
+  });
+  row.classList.toggle('director-open', details.open);
+  const slot = row.querySelector('.blocking-image-slot');
+  if (shot.blockingImageUrl) {
+    const link = document.createElement('a');
+    link.href = shot.blockingImageUrl;
+    link.target = '_blank'; link.rel = 'noopener';
+    link.title = '查看原尺寸调度图';
+    const image = document.createElement('img');
+    image.src = shot.blockingImageUrl;
+    image.alt = shot.blockingDescription || '镜头调度图';
+    image.loading = 'lazy';
+    link.append(image); slot.append(link);
+  } else {
+    slot.textContent = '未上传调度图。可上传手绘示意，或让 Skill 生成后通过 MCP 回填。';
+  }
+  const input = row.querySelector('.blocking-file');
+  const upload = row.querySelector('.blocking-upload');
+  upload.textContent = shot.blockingImageUrl ? '替换调度图' : '上传调度图';
+  upload.addEventListener('click', () => input.click());
+  const remove = row.querySelector('.blocking-remove');
+  remove.disabled = !shot.blockingImageUrl;
+  const endpoint = `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}/blocking-image`;
+  async function changeDiagram(method, file) {
+    upload.disabled = true; remove.disabled = true;
+    try {
+      await flushSave();
+      const form = file ? new FormData() : null;
+      if (file) form.append('file', file);
+      project = await api(endpoint, { method, ...(form ? { body: form } : {}) });
+      openDirectorShots.add(shot.id);
+      renderStoryboard();
+      showToast(file ? '调度图已保存' : '调度图已移除');
+    } catch (error) {
+      showToast(error.message, 'error');
+      upload.disabled = false; remove.disabled = !shot.blockingImageUrl;
+    }
+  }
+  input.addEventListener('change', () => {
+    const file = input.files[0];
+    if (file && file.size > 20 * 1024 * 1024) { showToast('调度图不能超过 20MB', 'error'); return; }
+    if (file) changeDiagram('POST', file);
+  });
+  remove.addEventListener('click', () => {
+    if (confirm('移除这张镜头调度图？动作和调度文字会保留。')) changeDiagram('DELETE');
+  });
+  updateDirectorSummary(row, shot);
+}
 function renderStoryboard() {
   renderVoice();
   closeSelect();
@@ -2108,9 +2173,10 @@ function renderStoryboard() {
 
     row.querySelectorAll("[data-field]").forEach((control) => {
       const field = control.dataset.field;
-      control.value = shot[field];
+      control.value = shot[field] ?? '';
       control.addEventListener("input", () => {
         shot[field] = field === "duration" ? Number(control.value) : control.value;
+        if (['actionDescription', 'blockingDescription'].includes(field)) updateDirectorSummary(row, shot);
         updateSummary();
         if (field === "visualPrompt") {
           updateBatchButton();
@@ -2132,6 +2198,7 @@ function renderStoryboard() {
       });
     });
 
+    setupBlockingDiagram(row, shot);
     row.querySelector(".preview-slot").append(renderPreview(shot, index));
     const status = row.querySelector(".generation-status");
     status.textContent = generationLabel(shot);
@@ -2165,13 +2232,13 @@ function renderStoryboard() {
   if (project.shots.length === 0) {
     const empty = document.createElement("tr");
     empty.className = "empty-row";
-    empty.innerHTML = '<td colspan="10"><strong>这个项目还没有镜头</strong><span>点右上角「＋ 新增镜头」手动添加，或在脚本页写好脚本后让 Agent 拆成分镜。</span></td>';
+    empty.innerHTML = '<td colspan="6"><strong>这个项目还没有镜头</strong><span>点右上角「＋ 新增镜头」手动添加，或在脚本页写好脚本后让 Agent 拆成分镜。</span></td>';
     body.append(empty);
   } else {
     const none = document.createElement("tr");
     none.className = "no-match-row";
     none.hidden = true;
-    none.innerHTML = '<td colspan="10">没有匹配的镜头</td>';
+    none.innerHTML = '<td colspan="6">没有匹配的镜头</td>';
     body.append(none);
   }
 

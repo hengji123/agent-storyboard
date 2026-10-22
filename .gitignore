@@ -9,6 +9,7 @@ __pycache__/
 .superpowers/
 generation/
 data/projects.json
+data/projects.json.*.tmp
 data/projects/
 data/media/
 data/storyboard.json

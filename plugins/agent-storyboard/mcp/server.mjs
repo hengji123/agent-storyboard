@@ -306,6 +306,8 @@ function shotSchema({ requireId = false } = {}) {
       duration: { type: "number", minimum: 0 },
       dialogue: { type: "string" },
       visualPrompt: { type: "string" },
+      actionDescription: { type: 'string', description: 'Starting state, subject actions and gaze, rhythm and ending state within this shot.' },
+      blockingDescription: { type: 'string', description: 'Camera position, subject positions, eyelines, movement paths and axis constraints; separate from final visual appearance.' },
       generator: {
         type: "string",
         enum: ["manual", "image-gen", "hyperframes", "remotion"]
@@ -357,6 +359,12 @@ async function uploadDesign(projectId, designPath, args) {
 
 function tools() {
   return [
+    {
+      name: 'manage_storyboard_blocking_image',
+      description: 'Attach a local camera/subject blocking diagram to a shot, or remove it. This is separate from the final reference image/video; use actionDescription and blockingDescription in project shot updates for text.',
+      inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, shotId: { type: 'string' }, action: { type: 'string', enum: ['attach', 'remove'] }, sourcePath: { type: 'string', description: 'Absolute local image path; required for attach.' }, storyboardUrl: { type: 'string' } }, required: ['projectId', 'shotId', 'action'], additionalProperties: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
     {
       name: "inspect_storyboard_environment",
       description: "Check the voice service, FFmpeg, Whisper alignment, and which agent CLIs (Codex, Claude Code) and image channel are available on this machine. Remotion / HyperFrames are agent-side capabilities and are not checked here.",
@@ -678,6 +686,15 @@ function tools() {
 }
 
 async function callTool(id, params) {
+  if (params?.name === 'manage_storyboard_blocking_image') {
+    const input = params.arguments || {};
+    if (!['attach', 'remove'].includes(input.action)) throw Error('Invalid blocking image action');
+    if (input.action === 'attach' && !input.sourcePath) throw Error('sourcePath is required');
+    const path = `/api/projects/${encodeURIComponent(input.projectId)}/shots/${encodeURIComponent(input.shotId)}/blocking-image`;
+    const project = await requestJson(path, input.action === 'remove' ? { method: 'DELETE' } : jsonOptions({ sourcePath: input.sourcePath }), input);
+    sendResult(id, { content: [{ type: 'text', text: JSON.stringify(project) }] });
+    return;
+  }
   if (["inspect_storyboard_environment", "heartbeat_storyboard_generation_task", "manage_storyboard_audio"].includes(params?.name)) {
     const input = params.arguments || {};
     let path = "/api/environment", options = {};

@@ -18,12 +18,16 @@ test("moveShot reorders without mutating and ignores no-ops", () => {
 test("cloneShot keeps text and settings but drops media and generation state", () => {
   const copy = cloneShot({
     id: "old", dialogue: "你好", visualPrompt: "雨", generator: "image-gen", rollType: "A-ROLL",
-    mediaUrl: "/media/p/shot-001.png", generationStatus: "ready", generationTaskId: "t1", generationError: "x"
+    mediaUrl: "/media/p/shot-001.png", generationStatus: "ready", generationTaskId: "t1", generationError: "x",
+    actionDescription: '抬头', blockingDescription: '机位在门口', blockingImageUrl: '/media/p/blocking.png'
   }, "new-id");
   assert.equal(copy.id, "new-id");
   assert.equal(copy.dialogue, "你好");
   assert.equal(copy.generator, "image-gen");
   assert.equal(copy.mediaUrl, "");
+  assert.equal(copy.actionDescription, '抬头');
+  assert.equal(copy.blockingDescription, '机位在门口');
+  assert.equal(copy.blockingImageUrl, '');
   assert.equal(copy.generationStatus, "idle");
   assert.equal(copy.generationTaskId, "");
   assert.notEqual(cloneShot({}).id, cloneShot({}).id);
@@ -36,6 +40,8 @@ test("shotMatches searches dialogue, prompt and notes case-insensitively", () =>
   assert.ok(shotMatches(shot, "vlogger"));
   assert.ok(shotMatches(shot, "hook"));
   assert.ok(!shotMatches(shot, "不存在"));
+  assert.ok(shotMatches({ actionDescription: '向左转身' }, '转身'));
+  assert.ok(shotMatches({ blockingDescription: '机位保持轴线南侧' }, '南侧'));
 });
 
 test("shotStatusCounts ignores manual shots and includes covers", () => {

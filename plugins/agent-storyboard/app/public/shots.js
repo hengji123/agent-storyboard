@@ -18,6 +18,7 @@ export function moveShot(shots, from, to) {
 export function cloneShot(shot, id = newShotId()) {
   return {
     ...shot,
+    blockingImageUrl: '',
     id,
     mediaUrl: "",
     timeStart: null,
@@ -35,7 +36,7 @@ export function cloneShot(shot, id = newShotId()) {
 export function shotMatches(shot, query) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle) return true;
-  return [shot.dialogue, shot.visualPrompt, shot.notes]
+  return [shot.dialogue, shot.visualPrompt, shot.actionDescription, shot.blockingDescription, shot.notes]
     .some((text) => String(text || "").toLowerCase().includes(needle));
 }
 

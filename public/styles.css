@@ -3492,3 +3492,53 @@ th { height: 40px; font-size: 12px; letter-spacing: 0; }
 .voice-service-settings input, .voice-service-settings select { width: 100%; box-sizing: border-box; min-height: 36px; padding: 7px 9px; border: 1px solid var(--control-border); border-radius: 6px; color: var(--ink); background: var(--paper); }
 .voice-service-settings [hidden] { display: none !important; }
 .voice-service-settings small, #voice-service-status { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* Director board: six overview columns, with per-shot production details. */
+.table-shell table { min-width: 960px; }
+.table-shell .col-index { width: 44px; }
+.table-shell .col-shot-info { width: 158px; }
+.table-shell .col-dialogue { width: 23%; }
+.table-shell .col-visual { width: auto; }
+.table-shell .col-preview { width: 186px; }
+.table-shell .col-actions { width: 40px; }
+.shot-info-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.shot-info-fields > * { min-width: 0; }
+.shot-info-fields .duration-input { width: 100%; }
+.shot-info-fields .duration-input input { width: 100%; }
+.shot-field { display: block; min-width: 0; }
+.shot-field > span { display: block; color: var(--muted); font-size: 11px; margin: 0 0 5px; }
+.shot-director-cell .shot-field textarea { height: 90px; width: 100%; }
+.action-brief { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 6px 0; color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.shot-director-details { border-top: 1px solid var(--line); margin-top: 8px; }
+.shot-director-details summary { padding: 9px 0; cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+.director-completeness { color: var(--muted); font-size: 10px; font-weight: 400; margin-left: 5px; }
+.director-detail-body { display: grid; gap: 16px; padding: 6px 8px 12px 0; max-height: min(460px, 60vh); overflow-y: auto; overscroll-behavior: contain; }
+.director-open .action-brief { display: none; }
+.shot-director-cell .director-detail-body textarea { min-height: 90px; height: 120px; resize: vertical; max-height: none; }
+.blocking-heading { display: flex; flex-wrap: wrap; gap: 5px 10px; font-size: 12px; margin-bottom: 8px; }
+.blocking-heading span { color: var(--muted); font-size: 10px; }
+.blocking-image-slot { min-height: 90px; border: 1px dashed var(--control-border); border-radius: 8px; padding: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; background: var(--surface-subtle); }
+.blocking-image-slot img { display: block; width: 100%; max-height: 180px; object-fit: contain; }
+.blocking-buttons { display: flex; gap: 8px; margin: 9px 0 12px; }
+.table-shell[data-density="compact"] .shot-info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.table-shell[data-density="compact"] .shot-info-fields .select-trigger { font-size: 11px; min-height: 28px; padding: 4px; }
+.table-shell[data-density="compact"] .shot-director-cell > .shot-field textarea { height: 42px; }
+.table-shell[data-density="compact"] .action-brief { -webkit-line-clamp: 1; margin: 3px 0; }
+.table-shell[data-density="compact"] .shot-director-details { margin-top: 3px; }
+.table-shell[data-density="compact"] .shot-director-details summary { padding: 5px 0; }
+.table-shell[data-density="compact"] .director-detail-body textarea { height: 120px; min-height: 90px; max-height: none; }
+@media (max-width: 1100px) {
+  .table-shell table { min-width: 0; }
+  .shot-row td:nth-child(n) { grid-column: 1 / -1; }
+  .shot-row td.index-cell { grid-column: 1; grid-row: 1; }
+  .shot-row td.row-actions-cell { grid-column: 2; grid-row: 1; }
+  .shot-row td:nth-child(n)::before { content: none; display: none; }
+  .shot-row td.shot-dialogue-cell::before { content: '旁白 / 对白'; display: block; color: var(--muted); font-size: 11px; margin: 6px 0; }
+  .shot-info-fields, .table-shell[data-density="compact"] .shot-info-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .shot-row .shot-director-cell, .shot-row .preview-cell { min-width: 0; }
+  .shot-row .preview-cell .preview-stack { align-items: flex-start; }
+  .shot-director-cell .shot-field textarea { height: auto; min-height: 64px; }
+}
+@media (max-width: 520px) {
+  .shot-info-fields, .table-shell[data-density="compact"] .shot-info-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

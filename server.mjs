@@ -212,6 +212,9 @@ function normalizeShot(shot = {}) {
     timeStart: Number.isFinite(shot.timeStart) ? shot.timeStart : null,
     timeEnd: Number.isFinite(shot.timeEnd) ? shot.timeEnd : null,
     visualPrompt: String(shot.visualPrompt || ""),
+    actionDescription: String(shot.actionDescription || ""),
+    blockingDescription: String(shot.blockingDescription || ""),
+    blockingImageUrl: String(shot.blockingImageUrl || ""),
     generator: ["manual", "image-gen", "hyperframes", "remotion"].includes(shot.generator)
       ? shot.generator
       : "manual",
@@ -641,7 +644,7 @@ async function buildProjectDocx(project) {
       docxHeaderCellXml("素材预览", columnWidths[1]),
       docxHeaderCellXml("口播文案", columnWidths[2]),
       docxHeaderCellXml("画面说明", columnWidths[3]),
-      docxHeaderCellXml("备注", columnWidths[4])
+      docxHeaderCellXml("调度 / 备注", columnWidths[4])
     ].join("")}</w:tr>`
   ];
 
@@ -655,8 +658,18 @@ async function buildProjectDocx(project) {
       ], columnWidths[0], "F8FAFC"),
       docxCellXml(await docxMediaParagraphsXml(project, shot, shotNumber, mediaFiles), columnWidths[1]),
       docxCellXml(docxParagraphsXml(shot.dialogue, { size: 19 }), columnWidths[2]),
-      docxCellXml(docxParagraphsXml(shot.visualPrompt, { size: 18 }), columnWidths[3]),
-      docxCellXml(docxParagraphsXml(shot.notes, { size: 17, color: "374151" }), columnWidths[4])
+      docxCellXml([
+        docxParagraphXml('静态画面', { bold: true, size: 18 }),
+        ...docxParagraphsXml(shot.visualPrompt, { size: 18 }),
+        docxParagraphXml('动作描述', { bold: true, size: 18 }),
+        ...docxParagraphsXml(shot.actionDescription, { size: 18 })
+      ], columnWidths[3]),
+      docxCellXml([
+        docxParagraphXml('镜头调度', { bold: true, size: 18 }),
+        ...docxParagraphsXml(shot.blockingDescription, { size: 17 }),
+        ...(shot.blockingImageUrl ? await docxMediaParagraphsXml(project, { ...shot, mediaUrl: shot.blockingImageUrl, mediaType: 'image', visualPrompt: shot.blockingDescription }, shotNumber, mediaFiles) : []),
+        ...docxParagraphsXml(shot.notes, { size: 17, color: "374151" })
+      ], columnWidths[4])
     ].join("")}</w:tr>`);
   }
 
@@ -740,6 +753,9 @@ function generationTask(project, item, type = "shot") {
     duration: isCover ? 0 : item.duration,
     dialogue: isCover ? item.title : item.dialogue,
     visualPrompt: isCover ? item.prompt : item.visualPrompt,
+    actionDescription: isCover ? '' : item.actionDescription,
+    blockingDescription: isCover ? '' : item.blockingDescription,
+    blockingImagePath: !isCover && item.blockingImageUrl ? join(projectMediaDir(project.id), basename(mediaFileNameFromUrl(item.blockingImageUrl))) : null,
     notes: isCover ? "短视频封面" : item.notes,
     requestedAt: item.generationRequestedAt,
     startedAt: item.generationStartedAt,
@@ -1137,6 +1153,9 @@ async function handleProjectsApi(request, response, url) {
     // 被删除镜头的素材一并清理，避免文件堆积，也避免之后按序号改名时撞到残留文件。
     const kept = new Set(next.shots.map((shot) => shot.mediaUrl).filter(Boolean));
     for (const removed of current.shots) {
+      if (!next.shots.some(shot => shot.blockingImageUrl && shot.blockingImageUrl === removed.blockingImageUrl)) {
+        await removeCurrentMedia(current, removed.blockingImageUrl);
+      }
       if (!next.shots.some((shot) => shot.id === removed.id) && removed.mediaUrl && !kept.has(removed.mediaUrl)) {
         await removeCurrentMedia(current, removed.mediaUrl);
       }
@@ -1167,6 +1186,42 @@ async function handleProjectsApi(request, response, url) {
 }
 
 async function handleShotsApi(request, response, url) {
+  const blockingMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/blocking-image$/);
+  if (blockingMatch) {
+    const project = await readProject(decodeURIComponent(blockingMatch[1]));
+    const shot = project.shots.find(item => item.id === decodeURIComponent(blockingMatch[2]));
+    if (!shot) return sendError(response, 404, 'Shot not found');
+    if (request.method === 'POST') {
+      let content, extension;
+      if ((request.headers['content-type'] || '').startsWith('multipart/form-data')) {
+        const file = parseMultipart(await readBodyBuffer(request, 20 * 1024 * 1024), request.headers['content-type']);
+        extension = allowedUploads.get(file.mimeType);
+        if (!file.mimeType.startsWith('image/') || !extension) return sendError(response, 400, '调度图仅支持 PNG、JPEG、WebP 和 GIF');
+        content = file.content;
+      } else {
+        const body = await readBody(request);
+        if (!body.sourcePath || !isAbsolute(body.sourcePath)) return sendError(response, 400, '请提供调度图本机绝对路径');
+        extension = extname(body.sourcePath).toLowerCase();
+        if (!['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(extension)) return sendError(response, 400, '调度图仅支持 PNG、JPEG、WebP 和 GIF');
+        if ((await stat(body.sourcePath)).size > 20 * 1024 * 1024) return sendError(response, 400, '调度图不能超过 20MB');
+        content = await readFile(body.sourcePath);
+      }
+      const fileName = `${createId('blocking')}${extension}`;
+      await writeFile(join(projectMediaDir(project.id), fileName), content);
+      const previous = shot.blockingImageUrl;
+      shot.blockingImageUrl = mediaUrl(project.id, fileName);
+      const saved = await saveProject(project);
+      if (previous && !project.shots.some(item => item.blockingImageUrl === previous)) await removeCurrentMedia(project, previous);
+      return sendJson(response, 200, saved);
+    }
+    if (request.method === 'DELETE') {
+      const previous = shot.blockingImageUrl;
+      shot.blockingImageUrl = '';
+      const saved = await saveProject(project);
+      if (previous && !project.shots.some(item => item.blockingImageUrl === previous)) await removeCurrentMedia(project, previous);
+      return sendJson(response, 200, saved);
+    }
+  }
   const collectionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots$/);
   if (collectionMatch && request.method === "POST") {
     const project = await readProject(decodeURIComponent(collectionMatch[1]));
@@ -1192,6 +1247,7 @@ async function handleShotsApi(request, response, url) {
     if (request.method === "DELETE") {
       const [removed] = project.shots.splice(index, 1);
       await removeCurrentMedia(project, removed.mediaUrl);
+      if (!project.shots.some(shot => shot.blockingImageUrl && shot.blockingImageUrl === removed.blockingImageUrl)) await removeCurrentMedia(project, removed.blockingImageUrl);
       await reconcileMediaOrder(project);
       return sendJson(response, 200, await saveProject(project));
     }
