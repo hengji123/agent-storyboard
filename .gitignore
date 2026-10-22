@@ -1,4 +1,5 @@
 .DS_Store
+local-run/
 node_modules/
 .venv-voice/
 .runtime-voice/

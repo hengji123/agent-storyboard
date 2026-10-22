@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agent-storyboard-local": {
+      "command": "node",
+      "args": ["F:/SEESEA/充电宝/agent-storyboard/plugins/agent-storyboard/mcp/server.mjs"],
+      "env": {
+        "AGENT_STORYBOARD_URL": "http://127.0.0.1:43218",
+        "AGENT_STORYBOARD_DATA_DIR": "F:/SEESEA/充电宝/agent-storyboard/data"
+      }
+    }
+  }
+}
