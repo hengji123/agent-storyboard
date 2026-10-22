@@ -32,7 +32,7 @@ process.stdin.on("end", () => {
   const url = `http://127.0.0.1:${port}`;
   const mcp = spawn(process.execPath, ["plugins/agent-storyboard/mcp/server.mjs"], {
     windowsHide: true,
-    env: { ...process.env, AGENT_STORYBOARD_URL: url, AGENT_STORYBOARD_CODEX: fake }
+    env: { ...process.env, AGENT_STORYBOARD_URL: url, AGENT_STORYBOARD_CODEX: process.execPath, AGENT_STORYBOARD_CODEX_ARGS: JSON.stringify([fake]) }
   });
   const pending = new Map();
   readline.createInterface({ input: mcp.stdout }).on("line", (line) => {

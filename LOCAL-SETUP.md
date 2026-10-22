@@ -22,7 +22,7 @@
 
 日常修改后运行 `npm run check` 和适用测试，再提交 Git。
 根目录服务与 public 是开发入口；功能变更需同步插件 app 副本，`tests/plugin-parity.test.mjs` 检查一致性。
-已有 Windows 测试结果为 27 通过、5 失败、1 跳过，详见项目分析中的技术报告；尚未修复上游测试夹具。
+当前 Windows 完整测试为 36 通过、0 失败、1 项因缺少 FFmpeg 跳过。Codex 模拟程序已改为通过 Node 显式启动，修复原有 Unix 脚本夹具的跨平台问题。另已在无头浏览器中验证批量静态图、批量调度图、单镜更新、自动回填与宽窄屏布局；真实生图质量和额度需以用户实际任务为准。
 
 ## MCP 接入
 
@@ -46,6 +46,16 @@ Yovoice 使用异步任务并下载 WAV，可直接生成配音，无需本机 F
 当前尚未提供其他云端厂商的通用 TTS 适配。接口由截图所示的本地 `/docs/openapi.json` 和 [Yovoice 官方协议](https://github.com/leemysw/yovoice/blob/main/docs/api.md) 核对。
 
 ## 自有 Skill 配合入口
+
+### 静态参考图与调度图任务
+
+顶栏分别提供「批量静态参考图」「批量镜头调度图」，可选择仅生成缺失/失败/待更新图片，或全部重新生成。每镜也可单独生成或更新两类图片，不受最终素材的手动/视频设置影响。
+网页提交的图片任务由本机 Codex 后台串行执行，使用已有登录账号的生图额度；启动前检查登录，完成后自动回填，并由网页轮询同步。点击生成前显示数量及额度提示，不因编辑文本自动消耗额度。
+静态参考图存放在 `referenceImageUrl`，调度图存放在 `blockingImageUrl`，均与最终视频/素材 `mediaUrl` 独立。`imageGeneration.reference` 与 `.blocking` 各自保存任务状态、内容哈希、版本及历史文件地址。
+修改相关描述、动作、制作备注或视觉规范后，已有图片标记为待更新；旧任务的结果不再接受。静态参考图更新后，已有调度图也会标记待更新。两类任务同时排队时，尚未开始的调度任务会绑定刚生成的参考图。
+每个完成版本使用新的文件地址，预览指向最新版，旧文件保留在版本记录中。上传替换同样记录新版本。后台写入与文字编辑使用独立内容版本校验，图片回填不会让正在编辑的文字被旧快照覆盖。
+通过 MCP 的 `queue_storyboard_images` 可选择 `imageKind: reference|blocking`，传 `shotIds`、`force`；默认由当前 Agent 领取处理。`runLocally: true` 使用本机后台。完成图片仍使用对应 taskId 调用任务完成接口，不能将旧任务结果写到新任务。
+新任务中 `taskType` 为 reference 或 blocking，`generator` 固定为 image-gen，`mediaType` 为 image。本机任务标记 `runner: local`，不重复认领；Agent 任务标记 runner: agent。后台任务在服务重启中断后会标记失败，可手动重试。
 
 ### 导演分镜字段与布局
 

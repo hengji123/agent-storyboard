@@ -1,11 +1,26 @@
 // 通过本机 Codex CLI 的 image_gen 出图，供没有内置生图能力的 Agent（例如 Claude Code）使用。
 // 原理：让 `codex exec` 调用它自带的 image_gen，把结果放到指定路径。需要本机装了 Codex 并已登录。
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, openSync, existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+export function resolveCodexCommand() {
+  if (process.env.AGENT_STORYBOARD_CODEX) return process.env.AGENT_STORYBOARD_CODEX;
+  if (process.env.CODEX_CLI_PATH && existsSync(process.env.CODEX_CLI_PATH)) return process.env.CODEX_CLI_PATH;
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    const target = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+    const native = join(process.env.APPDATA, 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', `codex-win32-${process.arch}`, 'vendor', target, 'bin', 'codex.exe');
+    if (existsSync(native)) return native;
+  }
+  return 'codex';
+}
+function configuredCommandArgs() {
+  const args = JSON.parse(process.env.AGENT_STORYBOARD_CODEX_ARGS || '[]');
+  if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string')) throw Error('Codex 启动参数必须是字符串数组');
+  return args;
+}
 
 export class ImageGenError extends Error {
   constructor(kind, message, retryable = true) {
@@ -17,7 +32,7 @@ export class ImageGenError extends Error {
 }
 
 const SHELL_METACHAR = /[;|&`$<>\n\r()'"]/;
-const lockPath = join(tmpdir(), "agent-storyboard-codex-image.lock");
+const lockPath = process.env.AGENT_STORYBOARD_IMAGE_LOCK || join(tmpdir(), "agent-storyboard-codex-image.lock");
 
 // 输出路径会原样写进发给 Codex 的指令，由它的 shell 去复制文件，含 shell 元字符会被误解析，所以直接拒绝。
 function assertSafePath(label, value) {
@@ -57,7 +72,7 @@ ${refHint}
 STEPS:
 1. Call image_gen with the prompt and aspect ratio above${refImages.length ? " (using the attached reference images for guidance)" : ""}.
 2. Move or copy ONLY the image produced by that image_gen call from Codex default location ($CODEX_HOME/generated_images/...) to: ${outputPath}
-3. Verify with: ls -la ${outputPath}
+3. Verify that the output file exists and is nonempty using the platform's native filesystem command.
 4. Reply with ONLY this JSON line (no markdown fences, no other text):
    {"status":"ok","path":"${outputPath}","bytes":<file_size_in_bytes>}
 
@@ -109,14 +124,15 @@ async function isImage(path) {
   return png || jpeg || webp;
 }
 
-function runCodex({ instruction, refImages, outputPath, timeoutMs, graceMs, pollMs, command, model }) {
+function runCodex({ instruction, refImages, outputPath, timeoutMs, graceMs, pollMs, command, commandArgs, model }) {
   return new Promise((resolvePromise, reject) => {
-    const args = ["exec", "--json", "--sandbox", "danger-full-access", "--skip-git-repo-check"];
+    const args = [...commandArgs, "exec", "--json", "--sandbox", "danger-full-access", "--skip-git-repo-check"];
     if (model) args.push("-m", model);
     for (const image of refImages) args.push("--image", image);
     args.push("-");
     const startedAt = Date.now();
     const child = spawn(command, args, {
+      windowsHide: true,
       env: { ...process.env, ...macSystemProxyEnv() },
       stdio: ["pipe", "pipe", "pipe"],
       // 独立进程组：Codex 会派生孙进程，收尾时整棵杀，避免它们占住管道。
@@ -202,7 +218,8 @@ export async function generateImageWithCodex({
   retries = 1,
   graceMs = 10_000,
   pollMs = 2000,
-  command = process.env.AGENT_STORYBOARD_CODEX || "codex",
+  command = resolveCodexCommand(),
+  commandArgs = configuredCommandArgs(),
   model = process.env.AGENT_STORYBOARD_CODEX_MODEL || "",
   fallbackModel = "gpt-5.5"
 }) {
@@ -220,7 +237,7 @@ export async function generateImageWithCodex({
     for (let attempt = 0; attempt <= retries; attempt++) {
       await rm(output, { force: true });
       try {
-        await runCodex({ instruction: buildInstruction({ prompt, outputPath: output, aspect, refImages: refs }), refImages: refs, outputPath: output, timeoutMs, graceMs, pollMs, command, model });
+        await runCodex({ instruction: buildInstruction({ prompt, outputPath: output, aspect, refImages: refs }), refImages: refs, outputPath: output, timeoutMs, graceMs, pollMs, command, commandArgs, model });
         if (!(await isImage(output))) throw new ImageGenError("no_output", "Codex 已结束，但没有生成有效的图片文件");
         return { path: output, bytes: (await stat(output)).size };
       } catch (error) {
@@ -241,8 +258,9 @@ export async function generateImageWithCodex({
 }
 
 export async function codexImageAvailable() {
-  const version = spawnSync(process.env.AGENT_STORYBOARD_CODEX || "codex", ["--version"], { encoding: "utf8" });
+  const command = resolveCodexCommand(), args = configuredCommandArgs();
+  const version = spawnSync(command, [...args, "--version"], { encoding: "utf8", windowsHide: true });
   if (version.error || version.status !== 0) return { ok: false, reason: "not_installed" };
-  const login = spawnSync(process.env.AGENT_STORYBOARD_CODEX || "codex", ["login", "status"], { encoding: "utf8" });
+  const login = spawnSync(command, [...args, "login", "status"], { encoding: "utf8", windowsHide: true });
   return login.status === 0 ? { ok: true } : { ok: false, reason: "not_logged_in" };
 }

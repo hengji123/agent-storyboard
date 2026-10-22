@@ -403,12 +403,14 @@ function isBatchGeneratable(shot) {
 }
 
 function updateBatchButton() {
-  const count = project?.shots.filter(isBatchGeneratable).length || 0;
-  generateAllButton.disabled = count === 0;
-  const badge = generateAllButton.querySelector(".tool-count");
-  badge.hidden = count === 0;
-  badge.textContent = String(count);
-  generateAllButton.setAttribute("aria-label", count > 0 ? `批量生成，${count} 个镜头待生成` : "批量生成");
+  for (const [kind, button] of [['reference', generateAllButton], ['blocking', document.querySelector('#generate-all-blocking')]]) {
+    const count = project?.shots.filter(shot => imageCanQueue(shot, kind)).length || 0;
+    const total = project?.shots.filter(shot => imageCanQueue(shot, kind, true)).length || 0;
+    button.disabled = total === 0;
+    const badge = button.querySelector('.tool-count');
+    badge.hidden = count === 0; badge.textContent = String(count);
+    button.title = `${kind === 'reference' ? '静态参考图' : '镜头调度图'}：${count} 张缺失或待更新，可选择全部 ${total} 张重新生成`;
+  }
   updateTaskChip();
 }
 
@@ -527,6 +529,7 @@ function buildMarkdownExport() {
       "",
       textBlock(shot.visualPrompt),
       "",
+      ...(shot.referenceImageUrl ? [`![静态参考图](${new URL(shot.referenceImageUrl, location.origin).href})`, ''] : []),
       '**动作描述**', '', textBlock(shot.actionDescription), '',
       '**镜头调度**', '', textBlock(shot.blockingDescription), '',
       ...(shot.blockingImageUrl ? [`![镜头调度图](${new URL(shot.blockingImageUrl, location.origin).href})`, ''] : []),
@@ -1200,7 +1203,12 @@ function shotAssets() {
 }
 
 function projectAssets() {
-  return [...coverAssets(), ...shotAssets()];
+  const images = (project?.shots || []).flatMap((shot, index) => ['reference', 'blocking'].flatMap(kind => {
+    const url = shot[kind === 'reference' ? 'referenceImageUrl' : 'blockingImageUrl'];
+    if (!url) return [];
+    return [{ id: `${shot.id}-${kind}`, type: 'shot-image', title: `镜头 ${String(index + 1).padStart(2, '0')} · ${kind === 'reference' ? '静态参考图' : '调度图'} · v${shot.imageGeneration?.[kind]?.version || 1}`, mediaType: 'image', sourceMediaType: 'image', mediaUrl: url, aspectRatio: project.aspectRatio.replace(':', ' / '), rollType: shot.rollType, description: kind === 'reference' ? shot.visualPrompt : shot.blockingDescription }];
+  }));
+  return [...coverAssets(), ...images, ...shotAssets()];
 }
 
 function renderAssetsPanel() {
@@ -1212,7 +1220,7 @@ function renderAssetsPanel() {
   const assets = projectAssets().filter((item) => !item.isPlaceholder).filter((item) => {
     if (activeAssetFilter === "all") return true;
     if (activeAssetFilter === "cover") return item.type === "cover";
-    return item.type === "shot" && item.mediaType === activeAssetFilter;
+    return item.type !== "cover" && item.mediaType === activeAssetFilter;
   });
 
   assetsGrid.replaceChildren();
@@ -1904,11 +1912,16 @@ const autosave = createAutosave({
   onSaved: (saved) => {
     if (project?.id !== saved.id) return;
     project.updatedAt = saved.updatedAt;
+    project.contentRevision = saved.contentRevision;
     // 调整顺序后服务端会同步素材文件名，这里跟上新的地址，避免预览变成破图。
     const urls = new Map(saved.shots.map((shot) => [shot.id, shot.mediaUrl]));
     let changed = false;
     for (const shot of project.shots) {
       if (urls.has(shot.id) && urls.get(shot.id) !== shot.mediaUrl) { shot.mediaUrl = urls.get(shot.id); changed = true; }
+      const remote = saved.shots.find(item => item.id === shot.id);
+      if (remote && JSON.stringify([shot.referenceImageUrl, shot.blockingImageUrl, shot.imageGeneration]) !== JSON.stringify([remote.referenceImageUrl, remote.blockingImageUrl, remote.imageGeneration])) {
+        shot.referenceImageUrl = remote.referenceImageUrl; shot.blockingImageUrl = remote.blockingImageUrl; shot.imageGeneration = remote.imageGeneration; changed = true;
+      }
     }
     if (changed) restoreFocusAfter(renderStoryboard);
   },
@@ -2094,9 +2107,75 @@ function attachRowDrag(row, shot) {
 }
 
 const openDirectorShots = new Set();
+function imageCanQueue(shot, kind, includeReady = false) {
+  const state = shot.imageGeneration?.[kind] || {};
+  return Boolean((kind === 'reference' ? shot.visualPrompt : shot.blockingDescription)?.trim()) && !['pending', 'processing', ...(includeReady ? [] : ['ready'])].includes(state.generationStatus);
+}
+function shotImageLabel(shot, kind) {
+  const state = shot.imageGeneration?.[kind] || {};
+  const name = kind === 'reference' ? '静态参考图' : '调度图';
+  if (['pending', 'processing'].includes(state.generationStatus)) return '取消任务';
+  if (state.generationStatus === 'stale') return `更新${name}`;
+  if (state.generationStatus === 'failed') return `重试${name}`;
+  return `${shot[kind === 'reference' ? 'referenceImageUrl' : 'blockingImageUrl'] ? '重新生成' : '生成'}${name}`;
+}
+function shotImageStatus(shot, kind) {
+  const state = shot.imageGeneration?.[kind] || {};
+  const labels = { idle: '尚未生成', pending: '排队中', processing: '生成中', ready: '已同步', stale: '描述已修改，待更新', failed: '生成失败' };
+  return `${labels[state.generationStatus] || '尚未生成'}${state.version ? ` · v${state.version}` : ''}`;
+}
+let batchImageKind = 'reference';
+function updateBatchImageScope() {
+  const all = document.querySelector('#batch-image-scope').value === 'all';
+  const count = project.shots.filter(shot => imageCanQueue(shot, batchImageKind, all)).length;
+  document.querySelector('#batch-image-count').textContent = `将生成 ${count} 张图片；正在排队或生成的任务会跳过。`;
+  document.querySelector('#batch-image-form [type="submit"]').disabled = count === 0;
+}
+function openBatchImageDialog(kind) {
+  batchImageKind = kind;
+  document.querySelector('#batch-image-title').textContent = kind === 'reference' ? '批量生成静态参考图' : '批量生成镜头调度图';
+  document.querySelector('#batch-image-scope').value = project.shots.some(shot => imageCanQueue(shot, kind)) ? 'needed' : 'all';
+  updateBatchImageScope();
+  document.querySelector('#batch-image-dialog').showModal();
+}
+document.querySelector('#batch-image-scope').addEventListener('change', updateBatchImageScope);
+document.querySelector('#batch-image-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const force = document.querySelector('#batch-image-scope').value === 'all';
+  const shotIds = project.shots.filter(shot => imageCanQueue(shot, batchImageKind, force)).map(shot => shot.id);
+  document.querySelector('#batch-image-dialog').close();
+  await runShotImages(shotIds, batchImageKind, force, true);
+});
+async function runShotImages(shotIds, kind, force = false, confirmed = false) {
+  const active = shotIds.map(id => project.shots.find(shot => shot.id === id)).filter(Boolean);
+  if (active.length === 1 && ['pending', 'processing'].includes(active[0].imageGeneration?.[kind]?.generationStatus)) {
+    try {
+      await flushSave();
+      const taskId = active[0].imageGeneration[kind].generationTaskId;
+      const result = await api(`/api/generation/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST', body: '{}' });
+      project = result.project; renderStoryboard();
+      showToast('已取消回填；正在运行的生成进程可能仍会消耗额度');
+    } catch (error) { showToast(error.message, 'error'); }
+    return;
+  }
+  if (!confirmed && !confirm(`通过本机 Codex 生成 ${active.length} 张${kind === 'reference' ? '静态参考图' : '镜头调度图'}并自动回填？将使用当前账号的图片生成额度。`)) return;
+  try {
+    await flushSave();
+    const result = await api('/api/generation/tasks', { method: 'POST', body: JSON.stringify({ projectId: project.id, shotIds, imageKind: kind, force, runLocally: true }) });
+    project = result.project; renderStoryboard();
+    showToast(`已提交 ${result.queued.length} 个任务，后台生成后自动同步`);
+  } catch (error) { showToast(error.message, 'error'); }
+}
+function renderReferencePreview(shot) {
+  const frame = document.createElement('div'); frame.className = 'reference-preview';
+  if (!shot.referenceImageUrl) { frame.textContent = '静态参考图尚未生成'; return frame; }
+  const link = document.createElement('a'); link.href = shot.referenceImageUrl; link.target = '_blank'; link.rel = 'noopener';
+  const image = document.createElement('img'); image.src = shot.referenceImageUrl; image.alt = shot.visualPrompt || '静态参考图'; image.loading = 'lazy';
+  link.append(image); frame.append(link); return frame;
+}
 function updateDirectorSummary(row, shot) {
   row.querySelector('.action-brief').textContent = shot.actionDescription ? `动作：${shot.actionDescription}` : '动作待设计';
-  row.querySelector('.director-completeness').textContent = `${shot.actionDescription ? '动作已写' : '缺动作'} · ${shot.blockingImageUrl ? '调度图已上传' : '缺调度图'}`;
+  row.querySelector('.director-completeness').textContent = `${shot.actionDescription ? '动作已写' : '缺动作'} · ${shotImageStatus(shot, 'blocking')}`;
 }
 function setupBlockingDiagram(row, shot) {
   const details = row.querySelector('.shot-director-details');
@@ -2118,7 +2197,7 @@ function setupBlockingDiagram(row, shot) {
     image.loading = 'lazy';
     link.append(image); slot.append(link);
   } else {
-    slot.textContent = '未上传调度图。可上传手绘示意，或让 Skill 生成后通过 MCP 回填。';
+    slot.textContent = '尚无调度图。填写下方调度说明后，可单镜生成、批量生成或上传图片。';
   }
   const input = row.querySelector('.blocking-file');
   const upload = row.querySelector('.blocking-upload');
@@ -2126,6 +2205,13 @@ function setupBlockingDiagram(row, shot) {
   upload.addEventListener('click', () => input.click());
   const remove = row.querySelector('.blocking-remove');
   remove.disabled = !shot.blockingImageUrl;
+  const generate = row.querySelector('.blocking-generate');
+  generate.textContent = shotImageLabel(shot, 'blocking');
+  generate.disabled = !shot.blockingDescription?.trim();
+  generate.addEventListener('click', () => runShotImages([shot.id], 'blocking', true));
+  const imageStatus = row.querySelector('.blocking-generation-status');
+  imageStatus.textContent = shotImageStatus(shot, 'blocking');
+  imageStatus.title = shot.imageGeneration?.blocking?.generationError || '';
   const endpoint = `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}/blocking-image`;
   async function changeDiagram(method, file) {
     upload.disabled = true; remove.disabled = true;
@@ -2176,15 +2262,27 @@ function renderStoryboard() {
       control.value = shot[field] ?? '';
       control.addEventListener("input", () => {
         shot[field] = field === "duration" ? Number(control.value) : control.value;
-        if (['actionDescription', 'blockingDescription'].includes(field)) updateDirectorSummary(row, shot);
+        if (['visualPrompt', 'actionDescription', 'blockingDescription', 'notes'].includes(field)) {
+          const kinds = field === 'blockingDescription' ? ['blocking'] : ['reference', 'blocking'];
+          for (const kind of kinds) {
+            const state = shot.imageGeneration?.[kind];
+            if (state && state.generationStatus === 'ready') state.generationStatus = 'stale';
+          }
+          updateDirectorSummary(row, shot);
+          row.querySelector('.blocking-generate').disabled = !shot.blockingDescription?.trim();
+          row.querySelector('.blocking-generate').textContent = shotImageLabel(shot, 'blocking');
+          row.querySelector('.blocking-generation-status').textContent = shotImageStatus(shot, 'blocking');
+          row.querySelector('.generation-status').textContent = shotImageStatus(shot, 'reference');
+          row.querySelector('.generate-shot').textContent = shotImageLabel(shot, 'reference');
+          row.querySelector('.generate-shot').disabled = !shot.visualPrompt?.trim();
+          updateBatchButton();
+        }
         updateSummary();
         if (field === "visualPrompt") {
           updateBatchButton();
           const generateButton = row.querySelector(".generate-shot");
-          generateButton.textContent = generationButtonLabel(shot);
-          generateButton.disabled =
-            shot.generationStatus === "processing" ||
-            (shot.generationStatus !== "pending" && !shot.visualPrompt.trim());
+          generateButton.textContent = shotImageLabel(shot, 'reference');
+          generateButton.disabled = !shot.visualPrompt.trim();
         }
         queueSave();
       });
@@ -2199,29 +2297,36 @@ function renderStoryboard() {
     });
 
     setupBlockingDiagram(row, shot);
-    row.querySelector(".preview-slot").append(renderPreview(shot, index));
+    row.querySelector(".preview-slot").append(renderReferencePreview(shot));
+    row.querySelector('.final-media-preview').append(renderPreview(shot, index));
+    row.querySelector('.final-media-upload').addEventListener('click', () => chooseUpload(shot.id));
+    const finalButton = row.querySelector('.generate-final-media');
+    finalButton.hidden = shot.generator === 'manual';
+    finalButton.textContent = generationButtonLabel(shot);
+    finalButton.disabled = !shot.visualPrompt.trim();
+    finalButton.addEventListener('click', () => ['pending', 'processing'].includes(shot.generationStatus) ? cancelGeneration(shot) : queueGeneration([shot.id], true));
+    const referenceInput = row.querySelector('.reference-file');
+    row.querySelector('.reference-upload').addEventListener('click', () => referenceInput.click());
+    referenceInput.addEventListener('change', async () => {
+      const file = referenceInput.files[0];
+      if (!file) return;
+      if (file.size > 20 * 1024 * 1024) { showToast('参考图不能超过 20MB', 'error'); return; }
+      try {
+        await flushSave();
+        const form = new FormData(); form.append('file', file);
+        project = await api(`/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}/reference-image`, { method: 'POST', body: form });
+        renderStoryboard();
+      } catch (error) { showToast(error.message, 'error'); }
+    });
     const status = row.querySelector(".generation-status");
-    status.textContent = generationLabel(shot);
-    status.dataset.status = shot.generationStatus || "idle";
-    status.title = shot.generationError || "";
+    status.textContent = shotImageStatus(shot, 'reference');
+    status.dataset.status = shot.imageGeneration?.reference?.generationStatus || 'idle';
+    status.title = shot.imageGeneration?.reference?.generationError || '';
 
     const generateButton = row.querySelector(".generate-shot");
-    generateButton.textContent = generationButtonLabel(shot);
-    generateButton.disabled =
-      (shot.generator !== "manual" && !shot.visualPrompt.trim());
-    generateButton.dataset.action = shot.generationStatus === "pending" ? "cancel" : "generate";
-    generateButton.addEventListener("click", () => {
-      if (shot.generator === "manual") return chooseUpload(shot.id);
-      if (shot.generationStatus === "processing") {
-        if (confirm("释放此任务？外部生成进程可能仍在运行，但旧结果将不再回填。")) return cancelGeneration(shot);
-        return;
-      }
-      if (shot.generationStatus === "pending") return cancelGeneration(shot);
-      return queueGeneration(
-        [shot.id],
-        shot.generationStatus === "ready" || shot.generationStatus === "failed"
-      );
-    });
+    generateButton.textContent = shotImageLabel(shot, 'reference');
+    generateButton.disabled = !shot.visualPrompt.trim();
+    generateButton.addEventListener('click', () => runShotImages([shot.id], 'reference', true));
 
     const menuButton = row.querySelector(".row-menu");
     menuButton.addEventListener("click", () => openRowMenu(menuButton, project.shots.findIndex((item) => item.id === shot.id)));
@@ -2815,7 +2920,7 @@ document.querySelector("#task-chip").addEventListener("click", () => {
   if (!project) return;
   const order = ["failed", "processing", "pending"];
   for (const status of order) {
-    const index = project.shots.findIndex((shot) => shot.generator !== "manual" && shot.generationStatus === status);
+    const index = project.shots.findIndex((shot) => (shot.generator !== 'manual' && shot.generationStatus === status) || Object.values(shot.imageGeneration || {}).some(state => state.generationStatus === status));
     if (index >= 0) { activeProjectTab = "storyboard"; renderProjectTabs(); return focusShotRow(index); }
   }
   openCoverPanel();
@@ -2890,8 +2995,10 @@ document.querySelector("#confirm-delete").addEventListener("click", async (event
 
 generateAllButton.addEventListener("click", async () => {
   closeDesignMenu(true);
-  const shotIds = project.shots.filter(isBatchGeneratable).map((shot) => shot.id);
-  await queueGeneration(shotIds, true);
+  openBatchImageDialog('reference');
+});
+document.querySelector('#generate-all-blocking').addEventListener('click', async () => {
+  openBatchImageDialog('blocking');
 });
 
 mediaUpload.addEventListener("change", () => uploadMedia(mediaUpload.files?.[0]));

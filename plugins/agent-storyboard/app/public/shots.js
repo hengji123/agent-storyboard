@@ -19,6 +19,8 @@ export function cloneShot(shot, id = newShotId()) {
   return {
     ...shot,
     blockingImageUrl: '',
+    referenceImageUrl: '',
+    imageGeneration: {},
     id,
     mediaUrl: "",
     timeStart: null,
@@ -43,6 +45,9 @@ export function shotMatches(shot, query) {
 export function shotStatusCounts(shots, covers = []) {
   const counts = { pending: 0, processing: 0, failed: 0 };
   for (const item of [...shots, ...covers]) {
+    for (const state of Object.values(item.imageGeneration || {})) {
+      if (state.generationStatus in counts) counts[state.generationStatus]++;
+    }
     if (item.generator === "manual") continue;
     if (item.generationStatus in counts) counts[item.generationStatus]++;
   }

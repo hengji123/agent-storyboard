@@ -1,6 +1,9 @@
 import { defaultDataDir } from "./env-compat.mjs";
 import { createServer } from "node:http";
 import { expireTasks } from "./task-state.mjs";
+import { createHash } from 'node:crypto';
+import { IMAGE_KINDS, imageUrlKey, normalizeImageGeneration, imageSourceHash, syncShotImages, recordShotImage, imagePrompt } from './shot-images.mjs';
+import { generateImageWithCodex, codexImageAvailable } from './codex-image.mjs';
 import { loadVoiceSettings, normalizeVoiceSettings, publicVoiceSettings, inspectVoiceProvider } from './voice-provider.mjs';
 import { inspectEnvironment } from "./runtime.mjs";
 import { generateVoice, alignVoice, transcribeReference } from "./audio.mjs";
@@ -38,6 +41,7 @@ const port = Number(args.port || process.env.PORT || process.env.AGENT_STORYBOAR
 let generationMutationQueue = Promise.resolve();
 let apiQueue = Promise.resolve();
 const audioJobs = new Set();
+const activeImageTaskIds = new Set();
 function serializeApi(operation) {
   const result = apiQueue.then(operation, operation);
   apiQueue = result.catch(() => {});
@@ -46,7 +50,13 @@ function serializeApi(operation) {
 async function atomicJson(path, value) {
   const temporary = `${path}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(temporary, path);
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(temporary, path); break; }
+    catch (error) {
+      if (attempt >= 6 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 25 * 2 ** attempt));
+    }
+  }
 }
 
 const aspectRatios = {
@@ -215,6 +225,8 @@ function normalizeShot(shot = {}) {
     actionDescription: String(shot.actionDescription || ""),
     blockingDescription: String(shot.blockingDescription || ""),
     blockingImageUrl: String(shot.blockingImageUrl || ""),
+    referenceImageUrl: String(shot.referenceImageUrl ?? (shot.mediaType !== 'video' ? shot.mediaUrl || '' : '')),
+    imageGeneration: normalizeImageGeneration(shot.imageGeneration),
     generator: ["manual", "image-gen", "hyperframes", "remotion"].includes(shot.generator)
       ? shot.generator
       : "manual",
@@ -273,6 +285,8 @@ function normalizeProject(project = {}) {
     scriptDraft: String(project.scriptDraft || ""),
     audio: project.audio && typeof project.audio === "object" ? project.audio : { takes: [], selectedId: "", status: "idle" },
     hasDesign: Boolean(project.hasDesign),
+    designRevision: String(project.designRevision || ''),
+    contentRevision: Number(project.contentRevision) || 0,
     covers: normalizeCovers(project.covers),
     shots: Array.isArray(project.shots) ? project.shots.map(normalizeShot) : [],
     createdAt: project.createdAt || now,
@@ -313,12 +327,20 @@ async function readProject(projectId) {
   try {
     const project = normalizeProject(JSON.parse(await readFile(projectFile(projectId), "utf8")));
     project.hasDesign = await exists(projectDesignFile(projectId));
+    const designRevision = project.hasDesign ? createHash('sha256').update(await readFile(projectDesignFile(projectId))).digest('hex') : '';
+    if (project.designRevision !== designRevision) { project.designRevision = designRevision; return saveProject(project); }
+    for (const shot of project.shots) for (const state of Object.values(shot.imageGeneration)) {
+      if (state.runner === 'local' && state.generationStatus === 'processing' && !activeImageTaskIds.has(state.generationTaskId)) {
+        state.generationStatus = 'failed'; state.generationError = '后台生成进程已中断，请重试';
+        return saveProject(project);
+      }
+    }
     if (["generating", "aligning"].includes(project.audio.status) && !audioJobs.has(projectId)) {
       project.audio.status = "failed";
       project.audio.error = "上次配音任务已中断，请重试";
       return saveProject(project);
     }
-    if (expireTasks(project)) return saveProject(project);
+    if (expireTasks(project) || syncShotImages(project)) return saveProject(project);
     return project;
   } catch (error) {
     if (error.code === "ENOENT") throw Object.assign(new Error("Project not found"), { status: 404 });
@@ -328,8 +350,13 @@ async function readProject(projectId) {
 
 async function saveProject(project) {
   const next = normalizeProject({ ...project, updatedAt: new Date(Math.max(Date.now(), Date.parse(project.updatedAt || 0) + 1 || 0)).toISOString() });
+  const previous = await readFile(projectFile(next.id), 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  const contentKey = value => JSON.stringify([value.title, value.aspectRatio, value.scriptDraft, (value.shots || []).map(shot => [shot.id, shot.rollType, shot.mediaType, shot.duration, shot.dialogue, shot.visualPrompt, shot.actionDescription || '', shot.blockingDescription || '', shot.generator, shot.notes])]);
+  next.contentRevision = (Number(previous?.contentRevision) || 0) + (!previous || contentKey(previous) !== contentKey(next) ? 1 : 0);
   await mkdir(projectMediaDir(next.id), { recursive: true });
   next.hasDesign = await exists(projectDesignFile(next.id));
+  next.designRevision = next.hasDesign ? createHash('sha256').update(await readFile(projectDesignFile(next.id))).digest('hex') : '';
+  syncShotImages(next);
   await atomicJson(projectFile(next.id), next);
 
   const index = await readProjectsIndex();
@@ -440,6 +467,7 @@ async function projectSummary(record) {
   const cover =
     project.covers.horizontal.mediaUrl ||
     project.covers.vertical.mediaUrl ||
+    project.shots.find((shot) => shot.referenceImageUrl)?.referenceImageUrl ||
     project.shots.find((shot) => shot.mediaUrl)?.mediaUrl ||
     "";
   return {
@@ -656,7 +684,7 @@ async function buildProjectDocx(project) {
         docxParagraphXml(shot.rollType || "B-ROLL", { alignment: "center", bold: true }),
         docxParagraphXml(`${Number(shot.duration || 0)}s`, { alignment: "center", bold: true })
       ], columnWidths[0], "F8FAFC"),
-      docxCellXml(await docxMediaParagraphsXml(project, shot, shotNumber, mediaFiles), columnWidths[1]),
+      docxCellXml(await docxMediaParagraphsXml(project, shot.referenceImageUrl ? { ...shot, mediaUrl: shot.referenceImageUrl, mediaType: 'image' } : shot, shotNumber, mediaFiles), columnWidths[1]),
       docxCellXml(docxParagraphsXml(shot.dialogue, { size: 19 }), columnWidths[2]),
       docxCellXml([
         docxParagraphXml('静态画面', { bold: true, size: 18 }),
@@ -762,6 +790,77 @@ function generationTask(project, item, type = "shot") {
     completedAt: item.generationCompletedAt,
     error: item.generationError
   };
+}
+
+function shotImageTask(project, shot, kind) {
+  const state = shot.imageGeneration[kind];
+  const task = generationTask(project, { ...shot, ...state }, 'shot');
+  return { ...task, taskType: kind, imageKind: kind, generator: 'image-gen', mediaType: 'image',
+    visualPrompt: imagePrompt(shot, kind), sourceHash: state.requestHash, version: state.version + 1, runner: state.runner,
+    referenceImagePath: kind === 'blocking' && shot.referenceImageUrl ? join(projectMediaDir(project.id), basename(mediaFileNameFromUrl(shot.referenceImageUrl))) : null
+  };
+}
+
+async function finishShotImage(found, sourcePath) {
+  const { project, parentShot: shot, imageKind: kind, item } = found;
+  if (!['pending', 'processing'].includes(item.generationStatus) || item.requestHash !== imageSourceHash(project, shot, kind)) throw Object.assign(Error('描述已更新，旧版本结果已拒绝'), { status: 409 });
+  const extension = extname(sourcePath).toLowerCase();
+  if (!['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(extension)) throw Object.assign(Error('参考图必须是图片文件'), { status: 400 });
+  const fileName = `${kind}-${item.generationTaskId}-v${item.version + 1}${extension}`;
+  await copyFile(sourcePath, join(projectMediaDir(project.id), fileName));
+  recordShotImage(project, shot, kind, mediaUrl(project.id, fileName));
+}
+
+let imageWorkerRunning = false;
+function kickImageWorker() {
+  if (imageWorkerRunning) return;
+  imageWorkerRunning = true;
+  setImmediate(async () => {
+    try {
+      for (;;) {
+        const task = await serializeApi(async () => {
+          const index = await readProjectsIndex();
+          for (const record of index.projects) {
+            const project = await readProject(record.id);
+            for (const shot of project.shots) for (const kind of IMAGE_KINDS) {
+              const item = shot.imageGeneration[kind];
+              if (item.runner !== 'local' || item.generationStatus !== 'pending') continue;
+              item.generationStatus = 'processing';
+              item.generationStartedAt = item.generationHeartbeatAt = new Date().toISOString();
+              await saveProject(project);
+              activeImageTaskIds.add(item.generationTaskId);
+              return shotImageTask(project, shot, kind);
+            }
+          }
+          return null;
+        });
+        if (!task) break;
+        const heartbeat = setInterval(() => serializeApi(async () => {
+          const found = await findTask(task.taskId);
+          if (!found || found.item.generationStatus !== 'processing') return;
+          found.item.generationHeartbeatAt = new Date().toISOString(); await saveProject(found.project);
+        }).catch(() => {}), 60000);
+        try {
+          let prompt = task.visualPrompt;
+          if (task.hasDesign) prompt += `\n\n项目视觉规范（调度工作图以空间可读性优先）：\n${await readFile(task.designPath, 'utf8')}`;
+          const result = await generateImageWithCodex({ prompt, aspect: task.aspectRatio, refImages: task.referenceImagePath ? [task.referenceImagePath] : [], outputPath: join(task.outputDir, 'image.png'), retries: 0 });
+          await serializeApi(async () => {
+            const found = await findTask(task.taskId);
+            if (!found || found.item.generationStatus !== 'processing') return;
+            await finishShotImage(found, result.path); await saveProject(found.project);
+          });
+        } catch (error) {
+          await serializeApi(async () => {
+            const found = await findTask(task.taskId);
+            if (!found || !['pending', 'processing'].includes(found.item.generationStatus)) return;
+            found.item.generationStatus = 'failed'; found.item.generationError = String(error.message).slice(0, 1500);
+            found.item.generationCompletedAt = new Date().toISOString(); await saveProject(found.project);
+          }).catch(() => {});
+        } finally { clearInterval(heartbeat); activeImageTaskIds.delete(task.taskId); }
+      }
+    } catch (error) { console.error('Image worker:', error.message); }
+    finally { imageWorkerRunning = false; }
+  });
 }
 
 async function attachMedia(project, shot, sourcePath, mediaType) {
@@ -918,6 +1017,10 @@ async function findTask(taskId) {
     const project = await readProject(record.id);
     const shot = project.shots.find((item) => item.generationTaskId === taskId);
     if (shot) return { project, item: shot, taskType: "shot" };
+    for (const parentShot of project.shots) for (const imageKind of IMAGE_KINDS) {
+      const item = parentShot.imageGeneration[imageKind];
+      if (item.generationTaskId === taskId) return { project, item, parentShot, imageKind, taskType: imageKind };
+    }
     for (const cover of Object.values(project.covers)) {
       if (cover.generationTaskId === taskId) return { project, item: cover, taskType: "cover" };
     }
@@ -1139,7 +1242,7 @@ async function handleProjectsApi(request, response, url) {
   if (request.method === "PUT") {
     const current = await readProject(projectId);
     const body = await readBody(request);
-    if (body.updatedAt && body.updatedAt !== current.updatedAt) {
+    if (body.updatedAt && body.updatedAt !== current.updatedAt && (body.contentRevision === undefined || body.contentRevision !== current.contentRevision)) {
       return sendError(response, 409, "项目已在其他窗口或生成任务中更新，请保留当前文本并刷新后重试");
     }
     const next = normalizeProject({
@@ -1148,14 +1251,15 @@ async function handleProjectsApi(request, response, url) {
       aspectRatio: body.aspectRatio,
       scriptDraft: body.scriptDraft ?? current.scriptDraft,
       covers: body.covers || current.covers,
-      shots: body.shots
+      shots: Array.isArray(body.shots) ? body.shots.map(shot => {
+        const runtime = current.shots.find(item => item.id === shot.id);
+        if (!runtime) return shot;
+        return { ...shot, referenceImageUrl: runtime.referenceImageUrl, blockingImageUrl: runtime.blockingImageUrl, imageGeneration: runtime.imageGeneration };
+      }) : body.shots
     });
     // 被删除镜头的素材一并清理，避免文件堆积，也避免之后按序号改名时撞到残留文件。
     const kept = new Set(next.shots.map((shot) => shot.mediaUrl).filter(Boolean));
     for (const removed of current.shots) {
-      if (!next.shots.some(shot => shot.blockingImageUrl && shot.blockingImageUrl === removed.blockingImageUrl)) {
-        await removeCurrentMedia(current, removed.blockingImageUrl);
-      }
       if (!next.shots.some((shot) => shot.id === removed.id) && removed.mediaUrl && !kept.has(removed.mediaUrl)) {
         await removeCurrentMedia(current, removed.mediaUrl);
       }
@@ -1186,11 +1290,12 @@ async function handleProjectsApi(request, response, url) {
 }
 
 async function handleShotsApi(request, response, url) {
-  const blockingMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/blocking-image$/);
+  const blockingMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/(blocking|reference)-image$/);
   if (blockingMatch) {
     const project = await readProject(decodeURIComponent(blockingMatch[1]));
     const shot = project.shots.find(item => item.id === decodeURIComponent(blockingMatch[2]));
     if (!shot) return sendError(response, 404, 'Shot not found');
+    const kind = blockingMatch[3];
     if (request.method === 'POST') {
       let content, extension;
       if ((request.headers['content-type'] || '').startsWith('multipart/form-data')) {
@@ -1206,19 +1311,18 @@ async function handleShotsApi(request, response, url) {
         if ((await stat(body.sourcePath)).size > 20 * 1024 * 1024) return sendError(response, 400, '调度图不能超过 20MB');
         content = await readFile(body.sourcePath);
       }
-      const fileName = `${createId('blocking')}${extension}`;
+      const fileName = `${createId(kind)}${extension}`;
       await writeFile(join(projectMediaDir(project.id), fileName), content);
-      const previous = shot.blockingImageUrl;
-      shot.blockingImageUrl = mediaUrl(project.id, fileName);
+      shot.imageGeneration[kind].generationTaskId = '';
+      recordShotImage(project, shot, kind, mediaUrl(project.id, fileName));
       const saved = await saveProject(project);
-      if (previous && !project.shots.some(item => item.blockingImageUrl === previous)) await removeCurrentMedia(project, previous);
       return sendJson(response, 200, saved);
     }
     if (request.method === 'DELETE') {
-      const previous = shot.blockingImageUrl;
-      shot.blockingImageUrl = '';
+      shot[imageUrlKey(kind)] = '';
+      shot.imageGeneration[kind].generationTaskId = '';
+      shot.imageGeneration[kind].generationStatus = 'idle';
       const saved = await saveProject(project);
-      if (previous && !project.shots.some(item => item.blockingImageUrl === previous)) await removeCurrentMedia(project, previous);
       return sendJson(response, 200, saved);
     }
   }
@@ -1247,7 +1351,6 @@ async function handleShotsApi(request, response, url) {
     if (request.method === "DELETE") {
       const [removed] = project.shots.splice(index, 1);
       await removeCurrentMedia(project, removed.mediaUrl);
-      if (!project.shots.some(shot => shot.blockingImageUrl && shot.blockingImageUrl === removed.blockingImageUrl)) await removeCurrentMedia(project, removed.blockingImageUrl);
       await reconcileMediaOrder(project);
       return sendJson(response, 200, await saveProject(project));
     }
@@ -1363,6 +1466,10 @@ async function handleGenerationApi(request, response, url) {
     const tasks = [];
     for (const record of index.projects) {
       const project = await readProject(record.id);
+      for (const shot of project.shots) for (const kind of IMAGE_KINDS) {
+        const item = shot.imageGeneration[kind];
+        if (item.generationTaskId && (!statuses.length || statuses.includes(item.generationStatus))) tasks.push(shotImageTask(project, shot, kind));
+      }
       tasks.push(...project.shots
         .filter((shot) => shot.generationTaskId)
         .filter((shot) => statuses.length === 0 || statuses.includes(shot.generationStatus))
@@ -1379,6 +1486,30 @@ async function handleGenerationApi(request, response, url) {
     const body = await readBody(request);
     if (!body.projectId) return sendError(response, 400, "projectId is required");
     const project = await readProject(String(body.projectId));
+    if (body.imageKind !== undefined) {
+      const kind = body.imageKind;
+      if (!IMAGE_KINDS.includes(kind)) return sendError(response, 400, 'imageKind 必须是 reference 或 blocking');
+      const selected = Array.isArray(body.shotIds) ? new Set(body.shotIds.map(String)) : null;
+      if (body.runLocally) {
+        const available = await codexImageAvailable();
+        if (!available.ok) return sendError(response, 400, available.reason === 'not_logged_in' ? '本机 Codex 尚未登录，请先登录后重试' : '未找到可用的本机 Codex，请先安装或配置路径');
+      }
+      const queued = [], skipped = [];
+      for (const shot of project.shots) {
+        if (selected && !selected.has(shot.id)) continue;
+        const state = shot.imageGeneration[kind];
+        if (!(kind === 'reference' ? shot.visualPrompt : shot.blockingDescription).trim()) { skipped.push({ shotId: shot.id, reason: 'missing-prompt' }); continue; }
+        if (['pending', 'processing'].includes(state.generationStatus)) { skipped.push({ shotId: shot.id, reason: state.generationStatus }); continue; }
+        if (!body.force && state.generationStatus === 'ready') { skipped.push({ shotId: shot.id, reason: 'ready' }); continue; }
+        state.generationTaskId = createTaskId(); state.requestHash = imageSourceHash(project, shot, kind);
+        state.generationStatus = 'pending'; state.generationError = ''; state.runner = body.runLocally ? 'local' : 'agent';
+        state.generationRequestedAt = new Date().toISOString(); state.generationStartedAt = state.generationHeartbeatAt = state.generationCompletedAt = null;
+        queued.push(shotImageTask(project, shot, kind));
+      }
+      const saved = await saveProject(project);
+      if (body.runLocally) kickImageWorker();
+      return sendJson(response, 201, { project: saved, queued, skipped });
+    }
     const requestedIds = Array.isArray(body.shotIds) ? new Set(body.shotIds.map(String)) : null;
     const requestedCoverTypes = Array.isArray(body.coverTypes)
       ? new Set(body.coverTypes.map(String).filter((type) => coverRatios[type]))
@@ -1455,8 +1586,9 @@ async function handleGenerationApi(request, response, url) {
       const [, taskId, action] = taskMatch;
       const found = await findTask(decodeURIComponent(taskId));
       if (!found) return sendError(response, 404, "Generation task not found");
-      const { project, item, taskType } = found;
+      const { project, item, taskType, parentShot, imageKind } = found;
       const body = await readBody(request);
+      if (imageKind && item.runner === 'local' && action === 'claim') return sendError(response, 409, '该任务由本地后台执行，不应重复认领');
 
       if (["complete", "fail", "heartbeat"].includes(action) && !["pending", "processing"].includes(item.generationStatus)) {
         return sendError(response, 409, `Task is ${item.generationStatus}`);
@@ -1473,7 +1605,8 @@ async function handleGenerationApi(request, response, url) {
 
       if (action === "complete") {
         if (!body.sourcePath) return sendError(response, 400, "sourcePath is required");
-        if (taskType === "cover") await attachCoverMedia(project, item, body.sourcePath);
+        if (imageKind) await finishShotImage(found, body.sourcePath);
+        else if (taskType === "cover") await attachCoverMedia(project, item, body.sourcePath);
         else await attachMedia(project, item, body.sourcePath, body.mediaType);
       }
 
@@ -1487,7 +1620,7 @@ async function handleGenerationApi(request, response, url) {
         if (!["pending", "processing"].includes(item.generationStatus)) {
           return sendError(response, 409, `Task is ${item.generationStatus}`);
         }
-        item.generationStatus = item.mediaUrl ? "ready" : "idle";
+        item.generationStatus = (imageKind ? parentShot[imageUrlKey(imageKind)] : item.mediaUrl) ? 'ready' : 'idle';
         item.generationTaskId = "";
         item.generationError = "";
         item.generationRequestedAt = null;
@@ -1496,6 +1629,10 @@ async function handleGenerationApi(request, response, url) {
       }
 
       const saved = await saveProject(project);
+      if (imageKind) {
+        const savedShot = saved.shots.find(shot => shot.id === parentShot.id);
+        return sendJson(response, 200, { project: saved, task: shotImageTask(saved, savedShot, imageKind) });
+      }
       const savedItem = taskType === "cover"
         ? saved.covers[item.type]
         : saved.shots.find((shot) => shot.id === item.id);
@@ -1713,6 +1850,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
+  kickImageWorker();
   console.log(`Agent 分镜台已启动：http://127.0.0.1:${port}`);
   console.log(`数据目录：${dataDir}`);
 });

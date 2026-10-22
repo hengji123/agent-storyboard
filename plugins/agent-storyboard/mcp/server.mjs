@@ -360,6 +360,12 @@ async function uploadDesign(projectId, designPath, args) {
 function tools() {
   return [
     {
+      name: 'queue_storyboard_images',
+      description: 'Queue independent static reference or blocking diagram images for any shot, including manual/video shots. Results must be completed against the same task ID; changed source prompts invalidate old tasks.',
+      inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, imageKind: { type: 'string', enum: ['reference', 'blocking'] }, shotIds: { type: 'array', items: { type: 'string' } }, force: { type: 'boolean' }, runLocally: { type: 'boolean', description: 'Run the local Codex worker automatically; otherwise the current agent claims and completes tasks.' }, storyboardUrl: { type: 'string' } }, required: ['projectId', 'imageKind'], additionalProperties: false },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    {
       name: 'manage_storyboard_blocking_image',
       description: 'Attach a local camera/subject blocking diagram to a shot, or remove it. This is separate from the final reference image/video; use actionDescription and blockingDescription in project shot updates for text.',
       inputSchema: { type: 'object', properties: { projectId: { type: 'string' }, shotId: { type: 'string' }, action: { type: 'string', enum: ['attach', 'remove'] }, sourcePath: { type: 'string', description: 'Absolute local image path; required for attach.' }, storyboardUrl: { type: 'string' } }, required: ['projectId', 'shotId', 'action'], additionalProperties: false },
@@ -686,6 +692,12 @@ function tools() {
 }
 
 async function callTool(id, params) {
+  if (params?.name === 'queue_storyboard_images') {
+    const input = params.arguments || {};
+    const result = await requestJson('/api/generation/tasks', jsonOptions(input), input);
+    sendResult(id, { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result });
+    return;
+  }
   if (params?.name === 'manage_storyboard_blocking_image') {
     const input = params.arguments || {};
     if (!['attach', 'remove'].includes(input.action)) throw Error('Invalid blocking image action');
@@ -922,6 +934,7 @@ async function callTool(id, params) {
 
   if (params?.name === "generate_storyboard_image") {
     const task = await findGenerationTask(args.taskId, args);
+    if (task.runner === 'local') throw Error('该图片任务由本机后台执行，请等待自动回填，不要重复生成');
     if (task.generator !== "image-gen" || task.mediaType !== "image") {
       throw new Error(`任务 ${args.taskId} 不是 AI 生图任务（生成方式：${task.generator}），无法用 Codex 出图`);
     }

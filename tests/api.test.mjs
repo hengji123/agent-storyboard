@@ -50,7 +50,8 @@ test("project persistence, conflict detection, generation cancellation and recov
     await writeFile(diagramSource, diagram);
     project = (await request(`${directorPath}/blocking-image`, 'POST', { sourcePath: diagramSource })).data;
     assert.notEqual(project.shots[0].blockingImageUrl, firstDiagramUrl);
-    assert.equal((await fetch(`http://127.0.0.1:${port}${firstDiagramUrl}`)).status, 404);
+    assert.equal((await fetch(`http://127.0.0.1:${port}${firstDiagramUrl}`)).status, 200);
+    assert.equal(project.shots[0].imageGeneration.blocking.version, 2);
     const docxResponse = await fetch(`http://127.0.0.1:${port}${path}/export/docx`);
     assert.equal(docxResponse.status, 200);
     const docxData = Buffer.from(await docxResponse.arrayBuffer());

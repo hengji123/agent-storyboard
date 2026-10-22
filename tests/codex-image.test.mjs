@@ -19,7 +19,7 @@ process.stdin.on("end", () => {
 });
 `);
   await chmod(path, 0o755);
-  return path;
+  return { command: process.execPath, commandArgs: [path] };
 }
 
 test("instruction carries prompt, aspect ratio, output path and reference count", () => {
@@ -31,7 +31,7 @@ test("returns the generated image", async () => {
   const dir = await mkdtemp(join(tmpdir(), "agent-storyboard-img-"));
   try {
     const command = await fakeCodex(dir, `fs.writeFileSync(out, png); console.log('{"type":"turn.completed"}');`);
-    const result = await generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "out", "fox.png"), command, retries: 0, pollMs: 50 });
+    const result = await generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "out", "fox.png"), ...command, retries: 0, pollMs: 50 });
     assert.ok(result.bytes > 1000);
     assert.equal((await readFile(result.path)).subarray(1, 4).toString(), "PNG");
   } finally { await rm(dir, { recursive: true, force: true }); }
@@ -42,7 +42,7 @@ test("stops a Codex process that hangs after the image is written", async () => 
   try {
     const command = await fakeCodex(dir, `fs.writeFileSync(out, png); setInterval(() => {}, 1000);`);
     const started = Date.now();
-    const result = await generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "hang.png"), command, retries: 0, pollMs: 50, graceMs: 150, timeoutMs: 20000 });
+    const result = await generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "hang.png"), ...command, retries: 0, pollMs: 50, graceMs: 150, timeoutMs: 20000 });
     assert.ok(result.bytes > 1000);
     assert.ok(Date.now() - started < 10000, "should not wait for the timeout");
   } finally { await rm(dir, { recursive: true, force: true }); }
@@ -52,9 +52,9 @@ test("reports Codex errors with the real cause, and a missing file as no_output"
   const dir = await mkdtemp(join(tmpdir(), "agent-storyboard-img-"));
   try {
     const failing = await fakeCodex(dir, `console.log(JSON.stringify({ type: "error", message: "usage limit reached" })); process.exit(1);`);
-    await assert.rejects(generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "a.png"), command: failing, retries: 0, pollMs: 50 }), /usage limit reached/);
+    await assert.rejects(generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "a.png"), ...failing, retries: 0, pollMs: 50 }), /usage limit reached/);
     const silent = await fakeCodex(dir, `process.exit(0);`);
-    await assert.rejects(generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "b.png"), command: silent, retries: 0, pollMs: 50 }), (error) => error instanceof ImageGenError && error.kind === "no_output");
+    await assert.rejects(generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "b.png"), ...silent, retries: 0, pollMs: 50 }), (error) => error instanceof ImageGenError && error.kind === "no_output");
     await assert.rejects(stat(join(dir, "b.png")));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -71,10 +71,10 @@ test("switches to the fallback model when the default one is not supported by th
       const args = process.argv.slice(2);
       if (!args.includes("-m")) { console.log(JSON.stringify({ type: "error", message: "The 'x' model is not supported when using Codex with a ChatGPT account." })); process.exit(1); }
       fs.writeFileSync(out, png);`);
-    const result = await generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "m.png"), command, retries: 0, pollMs: 50, fallbackModel: "gpt-5.5" });
+    const result = await generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "m.png"), ...command, retries: 0, pollMs: 50, fallbackModel: "gpt-5.5" });
     assert.ok(result.bytes > 1000);
     // 备用模型也不行时给出明确原因，而不是无限重试
     const alwaysBad = await fakeCodex(dir, `console.log(JSON.stringify({ type: "error", message: "not supported when using Codex with a ChatGPT account" })); process.exit(1);`);
-    await assert.rejects(generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "n.png"), command: alwaysBad, retries: 0, pollMs: 50 }), /默认模型不支持/);
+    await assert.rejects(generateImageWithCodex({ prompt: "fox", outputPath: join(dir, "n.png"), ...alwaysBad, retries: 0, pollMs: 50 }), /默认模型不支持/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
