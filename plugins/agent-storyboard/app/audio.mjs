@@ -1,10 +1,10 @@
 import { readFile, writeFile, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { extname, join, basename, dirname, resolve } from "node:path";
 import { run, ffmpeg, ffprobe, whisper, whisperModel } from "./runtime.mjs";
 import { defaultVoiceSettings, prepareVoiceProvider, synthesizeVoice } from "./voice-provider.mjs";
 import { voxcpmBase } from './voxcpm.mjs';
-import { matchRecognition } from "./recognition.mjs";
+import { forceAlign } from "./forced-align.mjs";
 
 async function verifyVoiceRuntime() {
   for (const [command, label] of [[ffmpeg, "FFmpeg"], [ffprobe, "FFprobe"]]) {
@@ -17,20 +17,12 @@ async function verifyVoiceRuntime() {
 }
 
 export async function alignVoice(path, shots, totalMs) {
-  if (!(await stat(whisperModel).catch(() => null))) throw new Error("Whisper 本地模型未安装，请先完成语音环境安装");
-  const directory = await mkdtemp(join(tmpdir(), "codex-whisper-"));
+  const directory = await mkdtemp(join(tmpdir(), 'storyboard-forced-'));
   try {
-    const wav = join(directory, "speech.wav"), output = join(directory, "recognition");
-    await run(ffmpeg, ["-y", "-i", path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], 60000);
-    await run(whisper, ["-m", whisperModel, "-f", wav, "-l", "zh", "-ojf", "-of", output, "-t", "4"], 30 * 60 * 1000);
-    const result = JSON.parse(await readFile(`${output}.json`, "utf8"));
-    const segments = (result.transcription || []).flatMap(segment => {
-      const tokens = (segment.tokens || []).filter(token => !token.text?.startsWith("[_") && token.offsets?.to > token.offsets?.from);
-      const parts = tokens.length ? tokens : [segment];
-      return parts.map(part => ({ text: part.text, start: part.offsets?.from, end: part.offsets?.to }));
-    }).filter(segment => Number.isFinite(segment.start) && segment.end > segment.start);
-    return { timeline: matchRecognition(shots, segments, totalMs), recognition: result.transcription.map(s => ({ text: s.text, start: s.offsets.from, end: s.offsets.to })), engine: "whisper.cpp-large-v3-turbo" };
-  } finally { await rm(directory, { recursive: true, force: true }); }
+    const wav=join(directory,'speech.wav');
+    await run(ffmpeg,['-y','-i',path,'-ar','16000','-ac','1','-c:a','pcm_s16le',wav],60000);
+    return await forceAlign(wav,shots,totalMs);
+  } finally { await rm(directory,{recursive:true,force:true}); }
 }
 
 export async function audioDuration(path) {
@@ -92,7 +84,7 @@ export async function transcribeReference(path) {
     const wav = join(directory, "reference.wav");
     const output = join(directory, "text");
     await run(ffmpeg, ["-y", "-i", path, "-t", "60", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], 60000);
-    await run(whisper, ["-m", whisperModel, "-f", wav, "-l", "auto", "-ojf", "-of", output, "-t", "4"], 5 * 60 * 1000);
+    await run(whisper, ["-m", basename(whisperModel), "-f", wav, "-l", "auto", "-ojf", "-of", output, "-t", "4"], 5 * 60 * 1000, { cwd: dirname(resolve(whisperModel)) });
     const result = JSON.parse(await readFile(`${output}.json`, "utf8"));
     return (result.transcription || []).map((segment) => String(segment.text || "").trim()).join("").trim();
   } catch {
@@ -131,7 +123,7 @@ export async function generateVoice({ directory, id, text, instruction, promptWa
     const settings = await prepareVoiceProvider(voiceSettings, { promptWav, promptText });
     const result = await synthesizeVoice(settings, { text, output, instruction, promptText });
     onProgress?.(1, 1);
-    return { fileName: `${id}.wav`, durationMs: result.durationMs, chunkCount: 1 };
+    return { fileName: `${id}.wav`, durationMs: result.durationMs, chunkCount: 1, usedReferenceText: settings.libraryVoice ? settings.referenceText : promptText, usedVoiceId: settings.voiceId || '' };
   }
   const temporary = [];
   let convertedPromptWav = null;

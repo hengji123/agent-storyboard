@@ -1,3 +1,6 @@
+import { bindReferenceAssetActions } from './reference-preview.js';
+import { syncPromptReferences } from "./reference-sync.js";
+import { animaticTimeline, animaticFrame } from "./animatic.js";
 import { createAutosave } from "./autosave.js";
 import { inspectPacingDetailed } from "./pacing.js";
 import { newShotId, moveShot, cloneShot, shotMatches, shotStatusCounts } from "./shots.js";
@@ -61,6 +64,7 @@ const styleApplyDialog = document.querySelector("#style-apply-dialog");
 
 const ratios = ["9:16", "16:9", "3:4", "4:3", "1:1"];
 const selectOptions = {
+  shotSize: ["", "大远景", "远景", "大全景", "全景", "中全景", "中景", "中近景", "近景", "特写", "大特写"].map(value => ({ value, label: value || "待指定景别" })),
   rollType: [
     { value: "A-ROLL", label: "A-ROLL" },
     { value: "B-ROLL", label: "B-ROLL" }
@@ -256,6 +260,7 @@ function showToast(message, type = "info", action = null) {
 
 function emptyShot() {
   return {
+    shotSize: "",
     rollType: "B-ROLL",
     mediaType: "image",
     duration: 5,
@@ -409,7 +414,7 @@ function updateBatchButton() {
     button.disabled = total === 0;
     const badge = button.querySelector('.tool-count');
     badge.hidden = count === 0; badge.textContent = String(count);
-    button.title = `${kind === 'reference' ? '静态参考图' : '镜头调度图'}：${count} 张缺失或待更新，可选择全部 ${total} 张重新生成`;
+    button.title = `${kind === 'reference' ? '分镜画面' : '镜头调度图'}：${count} 张缺失或待更新，可选择全部 ${total} 张重新生成`;
   }
   updateTaskChip();
 }
@@ -514,7 +519,7 @@ function buildMarkdownExport() {
 
   project.shots.forEach((shot, index) => {
     lines.push(
-      `### ${String(index + 1).padStart(2, "0")} · ${shot.rollType || "B-ROLL"}`,
+      `### ${String(index + 1).padStart(2, "0")} · ${shot.shotSize || "待指定景别"}`,
       "",
       `- 媒体：${selectLabel("mediaType", shot.mediaType)}`,
       `- 时长：${Number(shot.duration || 0)} 秒`,
@@ -529,7 +534,7 @@ function buildMarkdownExport() {
       "",
       textBlock(shot.visualPrompt),
       "",
-      ...(shot.referenceImageUrl ? [`![静态参考图](${new URL(shot.referenceImageUrl, location.origin).href})`, ''] : []),
+      ...(shot.referenceImageUrl ? [`![分镜画面](${new URL(shot.referenceImageUrl, location.origin).href})`, ''] : []),
       '**动作描述**', '', textBlock(shot.actionDescription), '',
       '**镜头调度**', '', textBlock(shot.blockingDescription), '',
       ...(shot.blockingImageUrl ? [`![镜头调度图](${new URL(shot.blockingImageUrl, location.origin).href})`, ''] : []),
@@ -558,7 +563,7 @@ function buildHtmlExport() {
   const rows = project.shots.map((shot, index) => `
       <tr>
         <td class="num">${index + 1}</td>
-        <td class="type">${escapeHtml(shot.rollType || "B-ROLL")}</td>
+        <td class="type">${escapeHtml(shot.shotSize || "待指定景别")}</td>
         <td class="duration">${Number(shot.duration || 0)}s</td>
         <td>${renderExportParagraph(shot.dialogue)}</td>
         <td><strong>静态画面</strong><br>${renderExportParagraph(shot.visualPrompt)}<br><strong>动作描述</strong><br>${renderExportParagraph(shot.actionDescription)}<br><strong>镜头调度</strong><br>${renderExportParagraph(shot.blockingDescription)}${shot.blockingImageUrl ? `<br><img style="max-width:100%;max-height:240px;object-fit:contain" alt="镜头调度图" src="${escapeHtml(new URL(shot.blockingImageUrl, location.origin).href)}">` : ''}</td>
@@ -1035,7 +1040,7 @@ function buildVoiceTimelinePrompt() {
     ))
     : [];
   const isAligned = Boolean(
-    take?.alignEngine?.startsWith("whisper") &&
+    (take?.alignmentMethod === 'forced' || take?.alignEngine?.startsWith("whisper")) &&
     timeline.length
   );
 
@@ -1068,7 +1073,7 @@ function buildStoryboardPrompt() {
     "## 必须执行的写回流程",
     "1. 使用 get_storyboard_project 读取上述项目，确认项目 ID、画面比例、脚本和现有镜头。项目 ID 已提供时不要凭标题猜测另一个项目。",
     "2. 先在内部完成导演视角的语义拆镜和全片检查，不要把中间表格输出到聊天中。",
-    "3. 将每个镜头转换为项目支持的结构化字段：rollType、mediaType、duration、dialogue、visualPrompt、actionDescription、blockingDescription、generator、notes。调度图通过 manage_storyboard_blocking_image 独立回填。",
+    "3. 将每个镜头转换为项目支持的结构化字段：shotSize（景别）、rollType（叙事用途）、mediaType、duration、dialogue、visualPrompt、actionDescription、blockingDescription、generator、notes。调度图通过 manage_storyboard_blocking_image 独立回填。",
     "4. 使用一次 update_storyboard_project 把结果写回当前项目的“分镜”页：已有镜头按顺序用 shotUpdates 覆盖，镜头不足用 appendShots 追加；确实多出的旧镜头才放入 deleteShotIds。不要删除项目、脚本、设计文件或已有媒体文件。",
     "5. 写回后读取项目确认镜头数量和关键字段已经保存。不要调用 image-gen、hyperframes、remotion 或其他素材生成工具；这里的 generator 只是后续制作计划。",
     "6. 最终聊天回复不要输出完整视觉编排表；请报告写入了多少个镜头、全片检查结论、需要补充的素材、需要确认的视觉方向、制作难度较高的镜头和项目链接。",
@@ -1081,7 +1086,7 @@ function buildStoryboardPrompt() {
     "",
     "## 基础项目约束",
     `- 画面比例：${ratio}`,
-    "- 后续落地到 Agent 分镜台时，每个镜头需要明确映射到 rollType、mediaType、duration、dialogue、visualPrompt、actionDescription、blockingDescription、generator、notes。静态画面、动作与调度分别填写，不混入备注。",
+    "- 后续落地到 Agent 分镜台时，每个镜头需要明确映射到 shotSize（景别）、rollType（叙事用途）、mediaType、duration、dialogue、visualPrompt、actionDescription、blockingDescription、generator、notes。静态画面、动作与调度分别填写，不混入备注。",
     "- A-ROLL 用于真人口播或主讲；B-ROLL 用于画面补充、录屏、数据图、动画。",
     "- generator 只能使用 manual、image-gen、hyperframes、remotion。",
     "- visualPrompt 要能直接指导图片或视频素材生成。",
@@ -1206,7 +1211,7 @@ function projectAssets() {
   const images = (project?.shots || []).flatMap((shot, index) => ['reference', 'blocking'].flatMap(kind => {
     const url = shot[kind === 'reference' ? 'referenceImageUrl' : 'blockingImageUrl'];
     if (!url) return [];
-    return [{ id: `${shot.id}-${kind}`, type: 'shot-image', title: `镜头 ${String(index + 1).padStart(2, '0')} · ${kind === 'reference' ? '静态参考图' : '调度图'} · v${shot.imageGeneration?.[kind]?.version || 1}`, mediaType: 'image', sourceMediaType: 'image', mediaUrl: url, aspectRatio: project.aspectRatio.replace(':', ' / '), rollType: shot.rollType, description: kind === 'reference' ? shot.visualPrompt : shot.blockingDescription }];
+    return [{ id: `${shot.id}-${kind}`, type: 'shot-image', title: `镜头 ${String(index + 1).padStart(2, '0')} · ${kind === 'reference' ? '分镜画面' : '调度图'} · v${shot.imageGeneration?.[kind]?.version || 1}`, mediaType: 'image', sourceMediaType: 'image', mediaUrl: url, aspectRatio: project.aspectRatio.replace(':', ' / '), rollType: shot.rollType, description: kind === 'reference' ? shot.visualPrompt : shot.blockingDescription }];
   }));
   return [...coverAssets(), ...images, ...shotAssets()];
 }
@@ -1663,15 +1668,54 @@ function closeLightbox() {
   document.body.classList.remove("lightbox-open");
 }
 
+let animaticAudio = null, animaticData = null, animaticPlaying = false, animaticTime = 0, animaticLast = 0, animaticRAF = 0;
+function updateAnimatic(time) {
+  if (!animaticData) return;
+  animaticTime = Math.max(0, Math.min(animaticData.duration, time));
+  const index = animaticFrame(animaticData, animaticTime);
+  if (index !== presenterIndex) { presenterIndex = index; renderPresenter(); }
+  const subtitle = animaticData.subtitles.filter(row => animaticTime >= row.start && animaticTime < row.end).map(row => row.text).join(' ');
+  document.querySelector('#presenter-subtitle').textContent = subtitle;
+  document.querySelector('#presenter-subtitle').hidden = !subtitle;
+  document.querySelector('#presenter-progress').value = animaticTime;
+  document.querySelector('#presenter-time').textContent = `${formatDuration(animaticTime)} / ${formatDuration(animaticData.duration)}`;
+  const button = document.querySelector('#presenter-play'); button.textContent = animaticPlaying ? '暂停' : '播放';
+  button.setAttribute('aria-label', animaticPlaying ? '暂停连续预览' : '播放连续预览');
+}
+function pauseAnimatic() {
+  animaticPlaying = false; cancelAnimationFrame(animaticRAF); animaticAudio?.pause(); presenterStage.querySelector('video')?.pause(); updateAnimatic(animaticTime);
+}
+function seekAnimatic(time) {
+  if (!animaticData) return;
+  if (animaticAudio) animaticAudio.currentTime = time;
+  animaticLast = performance.now(); updateAnimatic(time);
+}
+async function playAnimatic() {
+  if (!animaticData) return;
+  if (animaticPlaying) { pauseAnimatic(); return; }
+  if (animaticTime >= animaticData.duration) seekAnimatic(0);
+  try { if (animaticAudio) await animaticAudio.play(); }
+  catch { showToast('配音无法播放，请检查音频文件', 'error'); return; }
+  animaticPlaying = true; animaticLast = performance.now();
+  const video = presenterStage.querySelector('video'); if (video) video.play().catch(() => {});
+  function tick(now) {
+    if (!animaticPlaying) return;
+    const time = animaticAudio ? animaticAudio.currentTime : animaticTime + (now - animaticLast) / 1000;
+    animaticLast = now; updateAnimatic(time);
+    if (animaticTime >= animaticData.duration || animaticAudio?.ended) { pauseAnimatic(); return; }
+    animaticRAF = requestAnimationFrame(tick);
+  }
+  animaticRAF = requestAnimationFrame(tick); updateAnimatic(animaticTime);
+}
 function buildPresenterItems() {
   return (project?.shots || []).map((shot, index) => ({
     id: shot.id,
     title: `第 ${index + 1} 镜`,
     index,
     rollType: shot.rollType,
-    mediaType: shot.mediaType,
-    mediaUrl: shot.mediaUrl || (shot.rollType === "A-ROLL" ? arollPlaceholderUrl : ""),
-    isPlaceholder: !shot.mediaUrl,
+    mediaType: shot.referenceImageUrl ? 'image' : shot.mediaType,
+    mediaUrl: shot.referenceImageUrl || shot.mediaUrl || '',
+    isPlaceholder: !shot.referenceImageUrl && !shot.mediaUrl,
     description: shot.visualPrompt || shot.dialogue || shot.notes || "这一镜还没有内容描述。"
   }));
 }
@@ -1683,14 +1727,14 @@ function renderPresenter() {
   presenterStage.replaceChildren();
   document.querySelector("#presenter-project").textContent = project.title;
   document.querySelector("#presenter-title").textContent = item.title;
-  document.querySelector("#presenter-kind").textContent = item.rollType;
+  document.querySelector("#presenter-kind").textContent = project.shots[item.index]?.shotSize || "待指定景别";
   document.querySelector("#presenter-counter").textContent =
     `${presenterIndex + 1} / ${presenterItems.length}`;
   document.querySelector("#presenter-description").textContent = item.description;
 
   if (item.mediaUrl) {
     const media = item.mediaType === "video" && !item.isPlaceholder
-      ? Object.assign(document.createElement("video"), { controls: true, autoplay: true })
+      ? Object.assign(document.createElement("video"), { controls: false, autoplay: animaticPlaying, muted: true })
       : document.createElement("img");
     media.src = item.mediaUrl;
     media.alt = item.description;
@@ -1724,29 +1768,46 @@ function renderPresenter() {
     label.textContent = `${index + 1}`;
     button.append(label);
     button.addEventListener("click", () => {
-      presenterIndex = index;
-      renderPresenter();
+      seekAnimatic(animaticData.frames[index].start);
     });
     presenterStrip.append(button);
   });
+  const selectedThumb = presenterStrip.children[presenterIndex];
+  if (selectedThumb) {
+    const stripRect = presenterStrip.getBoundingClientRect();
+    const thumbRect = selectedThumb.getBoundingClientRect();
+    if (thumbRect.left < stripRect.left || thumbRect.right > stripRect.right) {
+      presenterStrip.scrollLeft += thumbRect.left - stripRect.left - (stripRect.width - thumbRect.width) / 2;
+    }
+  }
 }
 
 function openPresenter() {
   if (!project) return;
+  document.querySelector('#voice-takes .voice-play[aria-pressed="true"]')?.click();
   presenterItems = buildPresenterItems();
   if (presenterItems.length === 0) {
     showToast("当前项目还没有镜头", "error");
     return;
   }
+  pauseAnimatic();
+  animaticAudio = null;
+  const take = project.audio?.takes?.find(item => item.id === project.audio.selectedId);
+  animaticData = animaticTimeline(project.shots, take); animaticTime = 0;
+  if (take?.url) { animaticAudio = new Audio(take.url); animaticAudio.preload = 'auto'; animaticAudio.onended = () => { updateAnimatic(animaticData.duration); pauseAnimatic(); }; }
+  document.querySelector('#presenter-progress').max = animaticData.duration;
+  document.querySelector('#presenter-audio-note').textContent = take?.url ? '当前配音 · 识别字幕' : '无配音 · 按镜头时长预览';
   presenterIndex = 0;
   presenter.hidden = false;
   document.body.classList.add("lightbox-open");
   renderPresenter();
+  updateAnimatic(0);
   document.querySelector("#presenter-close").focus();
 }
 
 function closePresenter() {
   if (presenter.hidden) return;
+  pauseAnimatic(); if (animaticAudio) { animaticAudio.removeAttribute("src"); animaticAudio.load(); animaticAudio = null; }
   presenterStage.querySelector("video")?.pause();
   presenter.hidden = true;
   presenterStage.replaceChildren();
@@ -1756,8 +1817,7 @@ function closePresenter() {
 
 function movePresenter(offset) {
   if (presenter.hidden || presenterItems.length === 0) return;
-  presenterIndex = (presenterIndex + offset + presenterItems.length) % presenterItems.length;
-  renderPresenter();
+  seekAnimatic(animaticData.frames[(presenterIndex + offset + presenterItems.length) % presenterItems.length].start);
 }
 
 function selectLabel(field, value) {
@@ -1842,7 +1902,8 @@ function renderSelect(container, field, shot, onChange) {
   trigger.setAttribute("aria-haspopup", "listbox");
   trigger.setAttribute("aria-expanded", "false");
   trigger.setAttribute("aria-label", {
-    rollType: "镜头类型",
+    shotSize: "景别",
+    rollType: "叙事用途",
     mediaType: "媒体类型",
     generator: "生成方式"
   }[field]);
@@ -1870,9 +1931,10 @@ function renderSelect(container, field, shot, onChange) {
 }
 
 function updateSummary() {
-  const warnings = inspectPacingDetailed(project.shots);
+  const take = project.audio?.takes?.find(item => item.id === project.audio.selectedId);
+  const warnings = inspectPacingDetailed(project.shots, { take });
   const summary = document.querySelector("#pacing-summary");
-  summary.textContent = warnings.length ? `节奏检查 · ${warnings.length} 条建议` : "节奏检查 · 无明显异常";
+  summary.textContent = warnings.length ? `剪辑节奏 · ${warnings.length} 项待核对` : "剪辑节奏 · 暂无规则提示";
   summary.dataset.state = warnings.length ? "warn" : "ok";
   document.querySelector("#pacing-results").replaceChildren(...warnings.map(({ message, indexes }) => {
     const item = document.createElement("li");
@@ -2107,13 +2169,14 @@ function attachRowDrag(row, shot) {
 }
 
 const bulkShotSelection = new Set();
+let bulkShotSaving = false;
 function bulkShotTargets() {
   const scope = document.querySelector('#bulk-shot-scope').value;
   return (project?.shots || []).filter(shot => scope === 'all' || (scope === 'filtered' ? shotMatches(shot, shotQuery) : bulkShotSelection.has(shot.id)));
 }
 function bulkShotFields() {
   const fields = {};
-  for (const name of ['rollType', 'mediaType', 'duration', 'generator']) {
+  for (const name of ['shotSize', 'mediaType', 'duration', 'generator']) {
     const value = document.querySelector('#bulk-shot-' + name).value;
     if (value !== '') fields[name] = name === 'duration' ? Number(value) : value;
   }
@@ -2125,7 +2188,7 @@ function updateBulkShotSummary() {
   const fieldCount = Object.keys(fields).length;
   document.querySelector('#bulk-shot-picker').hidden = document.querySelector('#bulk-shot-scope').value !== 'selected';
   document.querySelector('#bulk-shot-summary').textContent = `将修改 ${count} 个镜头的 ${fieldCount} 项参数；其余参数保持不变。`;
-  document.querySelector('#bulk-shot-submit').disabled = !count || !fieldCount;
+  document.querySelector('#bulk-shot-submit').disabled = bulkShotSaving || !count || !fieldCount;
 }
 function openBulkShotDialog() {
   if (!project?.shots.length) { showToast('请先添加镜头'); return; }
@@ -2147,6 +2210,11 @@ document.querySelector('#bulk-edit-shots').addEventListener('click', openBulkSho
 document.querySelector('#bulk-edit-shots-header').addEventListener('click', openBulkShotDialog);
 document.querySelector('#bulk-shot-form').addEventListener('input', updateBulkShotSummary);
 document.querySelector('#bulk-shot-form').addEventListener('change', updateBulkShotSummary);
+document.querySelector('#bulk-shot-form').addEventListener('invalid', event => {
+  const message = event.target.id === 'bulk-shot-duration' ? '时长请输入大于等于 0 的数字，可填写小数秒。' : event.target.validationMessage;
+  document.querySelector('#bulk-shot-summary').textContent = message;
+  showToast(message, 'error');
+}, true);
 for (const [button, checked] of [['bulk-shot-select-all', true], ['bulk-shot-select-none', false]]) {
   document.querySelector('#' + button).addEventListener('click', () => {
     bulkShotSelection.clear();
@@ -2156,16 +2224,32 @@ for (const [button, checked] of [['bulk-shot-select-all', true], ['bulk-shot-sel
 }
 document.querySelector('#bulk-shot-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (bulkShotSaving) return;
   const fields = bulkShotFields(), shotIds = bulkShotTargets().map(shot => shot.id);
   if (!shotIds.length || !Object.keys(fields).length) return;
-  document.querySelector('#bulk-shot-submit').disabled = true;
+  bulkShotSaving = true;
+  const submit = document.querySelector('#bulk-shot-submit');
+  submit.disabled = true; submit.textContent = '正在保存…';
+  document.querySelector('#bulk-shot-summary').textContent = `正在保存 ${shotIds.length} 个镜头…`;
   try {
     await flushSave();
-    const result = await api(`/api/projects/${encodeURIComponent(project.id)}/shots/bulk`, { method: 'PATCH', body: JSON.stringify({ shotIds, fields, updatedAt: project.updatedAt, contentRevision: project.contentRevision }) });
+    const result = await api(`/api/projects/${encodeURIComponent(project.id)}/shots/bulk`, { method: 'PATCH', signal: AbortSignal.timeout(20000), body: JSON.stringify({ shotIds, fields, updatedAt: project.updatedAt, contentRevision: project.contentRevision }) });
     project = result.project;
-    document.querySelector('#bulk-shot-dialog').close(); renderStoryboard();
-    showToast(`已批量修改 ${result.updatedShotIds.length} 个镜头`);
-  } catch (error) { updateBulkShotSummary(); document.querySelector('#bulk-shot-summary').textContent = error.message; }
+    renderStoryboard();
+    const skipped = result.skippedShots || [];
+    const cancelled = result.cancelledTaskIds?.length || 0;
+    const message = `已批量修改 ${result.updatedShotIds.length} 个镜头${cancelled ? `；已取消 ${cancelled} 个旧参数的排队任务` : ''}${skipped.length ? `；第 ${skipped.map(item => item.shotIndex).join('、')} 镜正在生成，未修改` : ''}`;
+    if (skipped.length) document.querySelector('#bulk-shot-summary').textContent = message;
+    else document.querySelector('#bulk-shot-dialog').close();
+    showToast(message);
+  } catch (error) {
+    const message = ['TimeoutError', 'AbortError'].includes(error.name) ? '保存响应超时，请刷新核对结果后再重试。' : error.message;
+    document.querySelector('#bulk-shot-summary').textContent = message;
+    showToast(message, 'error');
+  } finally {
+    bulkShotSaving = false; submit.textContent = '应用修改';
+    submit.disabled = !bulkShotTargets().length || !Object.keys(bulkShotFields()).length;
+  }
 });
 const openDirectorShots = new Set();
 function imageCanQueue(shot, kind, includeReady = false) {
@@ -2174,7 +2258,7 @@ function imageCanQueue(shot, kind, includeReady = false) {
 }
 function shotImageLabel(shot, kind) {
   const state = shot.imageGeneration?.[kind] || {};
-  const name = kind === 'reference' ? '静态参考图' : '调度图';
+  const name = kind === 'reference' ? '分镜画面' : '调度图';
   if (['pending', 'processing'].includes(state.generationStatus)) return '取消任务';
   if (state.generationStatus === 'stale') return `更新${name}`;
   if (state.generationStatus === 'failed') return `重试${name}`;
@@ -2194,7 +2278,7 @@ function updateBatchImageScope() {
 }
 function openBatchImageDialog(kind) {
   batchImageKind = kind;
-  document.querySelector('#batch-image-title').textContent = kind === 'reference' ? '批量生成静态参考图' : '批量生成镜头调度图';
+  document.querySelector('#batch-image-title').textContent = kind === 'reference' ? '批量生成分镜画面' : '批量生成镜头调度图';
   document.querySelector('#batch-image-scope').value = project.shots.some(shot => imageCanQueue(shot, kind)) ? 'needed' : 'all';
   updateBatchImageScope();
   document.querySelector('#batch-image-dialog').showModal();
@@ -2207,7 +2291,7 @@ document.querySelector('#batch-image-form').addEventListener('submit', async eve
   document.querySelector('#batch-image-dialog').close();
   await runShotImages(shotIds, batchImageKind, force, true);
 });
-async function runShotImages(shotIds, kind, force = false, confirmed = false) {
+async function runShotImages(shotIds, kind, force = false, confirmed = false, revisionNotes = '') {
   const active = shotIds.map(id => project.shots.find(shot => shot.id === id)).filter(Boolean);
   if (active.length === 1 && ['pending', 'processing'].includes(active[0].imageGeneration?.[kind]?.generationStatus)) {
     try {
@@ -2219,19 +2303,20 @@ async function runShotImages(shotIds, kind, force = false, confirmed = false) {
     } catch (error) { showToast(error.message, 'error'); }
     return;
   }
-  if (!confirmed && !confirm(`通过本机 Codex 生成 ${active.length} 张${kind === 'reference' ? '静态参考图' : '镜头调度图'}并自动回填？将使用当前账号的图片生成额度。`)) return;
+  if (!confirmed && kind === 'reference' && active.length === 1 && active[0].referenceImageUrl) { openImageRevisionDialog(active[0]); return; }
+  if (!confirmed && !confirm(`通过本机 Codex 生成 ${active.length} 张${kind === 'reference' ? '分镜画面' : '镜头调度图'}并自动回填？将使用当前账号的图片生成额度。`)) return;
   try {
     await flushSave();
-    const result = await api('/api/generation/tasks', { method: 'POST', body: JSON.stringify({ projectId: project.id, shotIds, imageKind: kind, force, runLocally: true }) });
+    const result = await api('/api/generation/tasks', { method: 'POST', body: JSON.stringify({ projectId: project.id, shotIds, imageKind: kind, force, runLocally: true, revisionNotes }) });
     project = result.project; renderStoryboard();
     showToast(`已提交 ${result.queued.length} 个任务，后台生成后自动同步`);
   } catch (error) { showToast(error.message, 'error'); }
 }
 function renderReferencePreview(shot) {
   const frame = document.createElement('div'); frame.className = 'reference-preview';
-  if (!shot.referenceImageUrl) { frame.textContent = '静态参考图尚未生成'; return frame; }
+  if (!shot.referenceImageUrl) { frame.textContent = '分镜画面尚未生成'; return frame; }
   const link = document.createElement('a'); link.href = shot.referenceImageUrl; link.target = '_blank'; link.rel = 'noopener';
-  const image = document.createElement('img'); image.src = shot.referenceImageUrl; image.alt = shot.visualPrompt || '静态参考图'; image.loading = 'lazy';
+  const image = document.createElement('img'); image.src = shot.referenceImageUrl; image.alt = shot.visualPrompt || '分镜画面'; image.loading = 'lazy';
   link.append(image); frame.append(link); return frame;
 }
 function updateDirectorSummary(row, shot) {
@@ -2239,6 +2324,172 @@ function updateDirectorSummary(row, shot) {
   row.querySelector('.director-completeness').textContent = `${shot.actionDescription ? '动作已写' : '缺动作'} · ${shotImageStatus(shot, 'blocking')}`;
 }
 function setupBlockingDiagram(row, shot) {
+  syncPromptReferences(shot, project.shots);
+  const assetList = row.querySelector('.reference-asset-list');
+  shot.referenceAssets ||= [];
+  const picker = row.querySelector('.reference-asset-file');
+  const add = row.querySelector('.reference-asset-add');
+  const confirmReferences = row.querySelector('.reference-assets-confirm');
+  const noReferences = row.querySelector('.reference-assets-none');
+  const assetEndpoint = `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}/reference-assets`;
+  let replacementIndex = null;
+  let busy = false;
+  function updateReferenceStatus() {
+    const status = row.querySelector('.reference-asset-status');
+    const none = shot.referenceMode === 'none';
+    const refs = shot.referenceAssets.filter(asset => asset.scope !== 'blocking');
+    const missing = refs.filter(asset => !asset.path?.trim() || !asset.usage?.trim() || asset.contentHash === 'missing').length;
+    if (none) {
+      status.classList.remove('reference-warning'); status.textContent = '本镜无需参考图 · 仅按提示词生成';
+      confirmReferences.hidden = true; noReferences.hidden = true; return;
+    }
+    noReferences.hidden = false;
+    status.classList.toggle('reference-warning', !shot.referencesReviewed || missing > 0);
+    status.textContent = missing ? `已绑定 ${refs.length - missing} 张 · ${missing} 项引用待选择（可补图或不引用）` : !shot.referencesReviewed ? (refs.length ? `⚠ ${refs.length} 张参考图待确认` : '⚠ 尚无参考图片') : (refs.length ? `已引用 ${refs.length} 张 · 点击图片查看原图，× 移除引用` : '已确认无需参考图片');
+    confirmReferences.textContent = refs.length ? '确认引用' : '无需参考图片';
+    confirmReferences.hidden = !!shot.referencesReviewed || missing > 0 || refs.length === 0;
+  }
+  async function uploadFiles(files) {
+    if (busy) return;
+    if ([...files].some(file => file.size > 20 * 1024 * 1024)) { showToast('单张参考图不能超过 20MB', 'error'); return; }
+    busy = true; add.disabled = true;
+    try {
+      await flushSave();
+      for (const file of files) {
+        const form = new FormData(); form.append('file', file);
+        project = await api(assetEndpoint + (replacementIndex === null ? '' : '/' + replacementIndex), { method: 'POST', body: form });
+        replacementIndex = null;
+      }
+      renderStoryboard(); showToast('参考图片已保存');
+    } catch (error) { showToast(error.message, 'error'); renderStoryboard(); }
+    finally { busy = false; add.disabled = false; picker.value = ''; }
+  }
+  function renderAssets() {
+    updateReferenceStatus();
+    assetList.replaceChildren();
+    if (shot.referenceMode === 'none') return;
+    shot.referenceAssets.forEach((asset, index) => {
+      const button = document.createElement('div'); button.className = 'reference-asset-thumb';
+      let previewButton, removeButton;
+      button.title = asset.path ? '点击查看原图；右上角×移除引用' : '点击选择缺失的参考图片';
+      button.setAttribute('aria-label', asset.path ? `参考图片：${asset.name}` : `补齐参考图片：${asset.name}`);
+      if (asset.path && asset.contentHash !== 'missing') {
+        const image = document.createElement('img'); image.loading = 'lazy'; image.alt = asset.name || '参考图片';
+        image.src = `${assetEndpoint}/${index}?v=${encodeURIComponent(asset.contentHash || '')}`;
+        image.addEventListener('error', () => { button.classList.add('missing'); image.remove(); button.textContent = '⚠ 图片不可用'; button.onclick = () => { replacementIndex = index; picker.multiple = false; picker.click(); }; });
+        previewButton = document.createElement('button'); previewButton.type = 'button'; previewButton.className = 'reference-asset-preview';
+        previewButton.setAttribute('aria-label', `查看原图：${asset.name}`); previewButton.append(image);
+        removeButton = document.createElement('button'); removeButton.type = 'button'; removeButton.className = 'reference-asset-remove'; removeButton.textContent = '×';
+        removeButton.title = '移除引用'; removeButton.setAttribute('aria-label', `移除参考图片：${asset.name}`);
+        button.append(previewButton, removeButton);
+      } else {
+        const item = document.createElement('div'); item.className = 'reference-missing-choice';
+        const title = document.createElement('strong');
+        const displayName = asset.label || asset.name || '未命名参考资产';
+        title.textContent = `${displayName}${displayName !== asset.name && asset.name ? `（${asset.name}）` : ''}`;
+        const help = document.createElement('p');
+        help.textContent = asset.usage || `画面描述引用了此项，但尚未绑定可用图片。要固定其外观，请选择已有图片或上传；不需要固定外观时可不引用。`;
+        const choices = document.createElement('div'); choices.className = 'reference-choice-actions';
+        const upload = document.createElement('button'); upload.type = 'button'; upload.textContent = '上传图片';
+        upload.onclick = () => { replacementIndex = index; picker.multiple = false; picker.click(); };
+        const catalog = project.shots.flatMap(s => s.referenceAssets || []).filter(a => a.path && a.usage && a.contentHash !== 'missing' && a.scope !== 'blocking');
+        const unique = [...new Map(catalog.map(a => [JSON.stringify([a.path, a.usage]), a])).values()];
+        const select = document.createElement('select'); select.setAttribute('aria-label', `为${displayName}选择已有资产`);
+        const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '选择项目内已有图片'; select.append(placeholder);
+        unique.forEach((a, i) => { const option = document.createElement('option'); option.value = String(i); option.textContent = a.name; select.append(option); });
+        select.onchange = async () => {
+          if (select.value === '') return;
+          const chosen = unique[Number(select.value)];
+          if (!confirm(`将“${chosen.name}”用于“${displayName}”？请确认身份、年龄与服装相符。`)) { select.value = ''; return; }
+          shot.referenceAssets[index] = { ...chosen, name: asset.name || chosen.name, scope: 'reference' };
+          shot.referencesReviewed = false; queueSave(); renderAssets();
+        };
+        const brief = document.createElement('button'); brief.type = 'button'; brief.textContent = '复制补图需求';
+        brief.onclick = async () => {
+          const text = `为项目“${project.title}”补充${displayName}参考图。用途：${asset.usage || '固定该角色或物件的外观与跨镜一致性'}。当前镜头：${shot.visualPrompt}。请先核对身份、年龄、服装和时代，再制作可复用资产，不直接生成整镜成片。`;
+          try { await navigator.clipboard.writeText(text); showToast('补图需求已复制，可交给当前创作助手生成后上传'); }
+          catch { prompt('复制以下补图需求，生成图片后点击“上传图片”', text); }
+        };
+        const skip = document.createElement('button'); skip.type = 'button'; skip.textContent = '本镜不引用此项';
+        skip.onclick = () => {
+          shot.referenceExclusions = [...new Set([...(shot.referenceExclusions || []), asset.name])];
+          shot.referenceAssets.splice(index, 1); shot.referencesReviewed = false; queueSave(); renderAssets();
+        };
+        const fill = document.createElement('button'); fill.type = 'button'; fill.textContent = '一键补齐';
+        fill.title = '使用本机 Codex 生图能力生成缺失资产，并回填本项目同名缺项；会使用图片生成额度';
+        const readinessEndpoint = `${assetEndpoint}/${index}/autofill`;
+        fill.disabled = true; fill.textContent = '检查补齐服务…';
+        const checkAutofillReady = async () => {
+          if (!fill.isConnected) return;
+          try {
+            const result = await fetch(readinessEndpoint, { cache: 'no-store' });
+            if (result.status === 404) {
+              fill.textContent = '等待服务更新';
+              fill.disabled = true;
+              fill.title = '页面已更新，后端接口尚未加载。现有生成队列完成后服务将自动重启；此处会自动恢复。';
+              help.textContent = `${asset.usage || '此项尚未绑定图片。'} 一键补齐接口等待服务更新，现有生成任务不会被中断；也可先上传或选择已有图片。`;
+              setTimeout(checkAutofillReady, 10000); return;
+            }
+            if (!result.ok) throw Error('服务暂不可用');
+            fill.disabled = false; fill.textContent = '一键补齐';
+          } catch {
+            fill.disabled = true; fill.textContent = '等待服务连接';
+            setTimeout(checkAutofillReady, 10000);
+          }
+        };
+        setTimeout(checkAutofillReady, 0);
+        fill.onclick = async () => {
+          if (busy) return;
+          busy = true; fill.disabled = true;
+          const endpoint = `${assetEndpoint}/${index}/autofill`;
+          try {
+            await flushSave();
+            let job = await api(endpoint, { method: 'POST', body: '{}' });
+            fill.textContent = '正在补齐…'; help.textContent = '正在生成参考资产，完成后将自动绑定本项目同名缺项；可继续编辑其他镜头。';
+            while (job.status === 'processing') {
+              await new Promise(resolve => setTimeout(resolve, 2500));
+              job = await api(endpoint);
+            }
+            if (job.status !== 'ready') throw Error(job.error || '补齐未完成，请重试');
+            await flushSave();
+            project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
+            renderStoryboard(); showToast(`已生成并补齐 ${job.count} 处引用，请检查图片后确认引用`);
+          } catch (error) { fill.textContent = '重试补齐'; help.textContent = `补齐失败：${error.message}。可重试，或上传已有图片。`; showToast(error.message, 'error'); }
+          finally { busy = false; fill.disabled = false; }
+        };
+        choices.append(fill, select, upload, brief, skip); item.append(title, help, choices); assetList.append(item); return;
+      }
+      bindReferenceAssetActions(previewButton, removeButton, () => {
+        openAssetPreview({ mediaUrl: `${assetEndpoint}/${index}?v=${encodeURIComponent(asset.contentHash || '')}`, description: asset.name || '参考图片', title: asset.name || '参考图片' });
+      }, async () => {
+        if (busy) return;
+        busy = true;
+        try { await flushSave(); project = await api(assetEndpoint + '/' + index, { method: 'DELETE' }); renderStoryboard(); }
+        catch (error) { showToast(error.message, 'error'); }
+        finally { busy = false; }
+      });
+      assetList.append(button);
+    });
+  }
+  add.addEventListener('click', () => { replacementIndex = null; picker.multiple = true; picker.click(); });
+  picker.addEventListener('change', () => { if (picker.files.length) uploadFiles([...picker.files]); });
+  confirmReferences.addEventListener('click', () => { shot.referencesReviewed = true; updateReferenceStatus(); queueSave(); });
+  noReferences.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      await flushSave();
+      project = await api(`/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}`, {
+        method: 'PATCH', body: JSON.stringify({ referenceMode: 'none', referencesReviewed: true })
+      });
+      renderStoryboard();
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { busy = false; }
+  });
+  renderAssets();
+  row.syncReferenceAssets = () => {
+    syncPromptReferences(shot, project.shots); shot.referencesReviewed = shot.referenceMode === 'none'; renderAssets();
+  };
   const details = row.querySelector('.shot-director-details');
   details.open = openDirectorShots.has(shot.id);
   details.addEventListener('toggle', () => {
@@ -2340,6 +2591,7 @@ function renderStoryboard() {
         }
         updateSummary();
         if (field === "visualPrompt") {
+          row.syncReferenceAssets?.();
           updateBatchButton();
           const generateButton = row.querySelector(".generate-shot");
           generateButton.textContent = shotImageLabel(shot, 'reference');
@@ -2743,7 +2995,13 @@ function renderVoice() {
   const status = document.querySelector("#voice-status");
   status.textContent = audio.status === "generating" && audio.progress?.total
     ? `生成中 ${audio.progress.done}/${audio.progress.total}`
-    : ({ generating: "生成中", aligning: "对齐中", ready: "已就绪", failed: "需要处理" })[audio.status] || "未生成";
+    : ({ generating: "生成中", aligning: "对齐中", ready: "已就绪", failed: "对齐/生成失败 · 查看原因" })[audio.status] || "未生成";
+  if (audio.error && !busy) status.textContent = '处理未完成 · 点击查看原因';
+  status.title = audio.error || (busy ? '正在后台处理，请等待' : '查看配音状态');
+  status.tabIndex = 0; status.setAttribute('role', 'button');
+  const revealIssue = () => { document.querySelector('#voice-panel').open = true; document.querySelector('#voice-error').scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+  status.onclick = event => { event.preventDefault(); event.stopPropagation(); revealIssue(); };
+  status.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); revealIssue(); } };
   status.dataset.status = audio.status || "idle";
   const reference = audio.reference && typeof audio.reference === "object" ? audio.reference : null;
   const referenceName = document.querySelector("#voice-reference-name");
@@ -2760,26 +3018,42 @@ function renderVoice() {
     referencePlayer.removeAttribute("src");
     referencePlayer.load();
   }
-  if (document.activeElement !== referenceText) referenceText.value = reference?.text || "";
+  if (document.activeElement !== referenceText) referenceText.value = reference?.text || audio.referenceText || "";
+  if (document.activeElement !== document.querySelector("#voice-instruction")) document.querySelector("#voice-instruction").value = audio.instruction || "";
+  document.querySelector('#voice-auto-apply').checked = audio.autoApplyTiming !== false;
   currentMeta.textContent = take
     ? `版本 ${String(takeIndex + 1).padStart(2, "0")} · ${formatDuration(take.durationMs)}`
     : "尚未生成配音";
-  document.querySelector("#voice-error").textContent = audio.error || "";
+  const issue = audio.alignmentIssue;
+  const errorRoot = document.querySelector('#voice-error'); errorRoot.replaceChildren();
+  if (audio.error) {
+    const message = document.createElement('strong'); message.textContent = audio.error; errorRoot.append(message);
+    if (issue) {
+      const expected = document.createElement('p'); expected.textContent = `第 ${issue.shotIndex} 镜原台词：${issue.expectedText}`; errorRoot.append(expected);
+      const jump = document.createElement('button'); jump.type = 'button'; jump.className = 'secondary'; jump.textContent = `核对第 ${issue.shotIndex} 镜台词`;
+      jump.onclick = () => { document.querySelector('[data-project-tab="storyboard"]').click(); focusShotRow(project.shots.findIndex(shot => shot.id === issue.shotId)); }; errorRoot.append(jump);
+    }
+  }
   document.querySelector("#voice-generate").disabled = busy;
   document.querySelector("#voice-align").disabled = busy || !take || !hasSpokenShots;
   document.querySelector("#voice-apply").disabled = busy || !take?.timeline?.length;
   document.querySelector("#timing-note").hidden = false;
   document.querySelector("#timing-note").textContent = !take
-    ? "生成配音后，可识别台词并调整镜头时长。"
+    ? "生成配音后，按已知台词定位时间并调整镜头时长。"
     : !hasSpokenShots
       ? "当前项目没有带台词的镜头，无法进行对齐；请先在分镜中填写台词。"
-      : take.alignEngine?.startsWith("whisper")
-        ? "Whisper 已完成本地识别，可试听后微调时间。无台词镜头保留原时长。"
-        : "尚未完成识别，请先点击“重新识别”。";
-  document.querySelector("#voice-align").textContent = take?.timeline?.length ? "重新识别" : "识别并对齐";
-  document.querySelector("#timing-note").dataset.ready = String(Boolean(take?.alignEngine?.startsWith("whisper")));
-  if (take?.alignEngine?.startsWith("whisper")) document.querySelector("#timing-note").textContent = "Whisper 已完成本地识别";
-  renderVoicePlayer(project, busy, takeId => voiceAction("select", { takeId }));
+      : take.alignmentMethod === 'forced'
+        ? "原台词时间定位完成，可试听后微调边界。字幕始终使用镜头台词。"
+        : "请点击“定位台词时间”，以原台词定位音频，不重新听写文案。";
+  if (busy) document.querySelector('#timing-note').textContent = audio.status === 'aligning' ? '正在自动定位台词时间，成功后自动应用镜头时长；请等待。' : '正在生成配音，完成后将按原台词定位时间。';
+  else if (audio.error) document.querySelector('#timing-note').textContent = `未应用新时长：${audio.error}`;
+  else if (take?.appliedAt) document.querySelector('#timing-note').textContent = '对齐完成，镜头时长已自动应用。';
+  document.querySelector("#voice-align").textContent = take?.timeline?.length ? "重新定位" : audio.error ? '重试定位台词时间' : "定位台词时间";
+  document.querySelector("#timing-note").dataset.ready = String(Boolean((take?.alignmentMethod === 'forced' || take?.alignEngine?.startsWith("whisper"))));
+  if (take?.alignmentMethod === 'forced' && !busy && !audio.error) document.querySelector("#timing-note").textContent = take.appliedAt ? '原台词时间定位完成，镜头时长已应用。' : '原台词时间定位完成，可试听后应用时长。';
+  renderVoicePlayer(project, busy, takeId => voiceAction("select", { takeId }), takeId => {
+    if (confirm('删除此配音版本？')) voiceAction('delete', { takeId });
+  });
 }
 async function uploadVoiceReference(file) {
   if (!project || !file) return;
@@ -2828,27 +3102,123 @@ function updateVoiceServiceFields() {
   const provider = document.querySelector('#voice-provider').value;
   document.querySelector('#voice-token-field').hidden = provider === 'voxcpm';
   document.querySelector('#voice-yovoice-options').hidden = provider === 'voxcpm';
+  document.querySelector('#voice-advanced-settings').hidden = provider === 'voxcpm';
 }
+function voiceList(value, key) {
+  return Array.isArray(value) ? value : Array.isArray(value?.[key]) ? value[key] : value?.id ? [value] : [];
+}
+let libraryVoices = [];
+function populateVoiceChoices(result) {
+  const models = voiceList(result.models?.installed, 'installed');
+  libraryVoices = voiceList(result.voices, 'voices');
+  for (const [target, items] of [['voice-service-model', models], ['voice-service-voice', libraryVoices]]) {
+    const select = document.querySelector('#' + target); const selected = select.value || (target.endsWith('model') ? savedVoiceService?.modelId : savedVoiceService?.voiceId) || '';
+    const empty = document.createElement('option'); empty.value = ''; empty.textContent = target.endsWith('model') ? '服务默认模型' : '请选择音色';
+    const options = items.map(item => { const option = document.createElement('option'); option.value = item.id; const catalog = result.models?.catalog?.find(entry => entry.id === item.id); option.textContent = item.name || (catalog ? `${catalog.name} · ${catalog.precision}` : item.id); return option; });
+    if (selected && !items.some(item => item.id === selected)) { const option = document.createElement('option'); option.value = selected; option.textContent = selected + '（当前配置）'; options.push(option); }
+    select.replaceChildren(empty, ...options); select.value = selected;
+  }
+  updateVoiceSource();
+}
+function updateVoiceSource() {
+  const upload = document.querySelector('#voice-reference-source').value === 'upload';
+  document.querySelector('#voice-service-voice').disabled = upload;
+  const voice = libraryVoices.find(item => item.id === document.querySelector('#voice-service-voice').value);
+  document.querySelector('#voice-library-note').textContent = upload ? '当前使用本项目上传音频和下方参考原文；音色库不参与。' : voice?.referenceText ? `已读取音色库参考原文：${voice.referenceText}` : '当前音色未提供参考原文；精细克隆前请在 Yovoice 音色库补齐。';
+  document.querySelector('#voice-reference-text').disabled = !upload;
+  document.querySelector('#voice-reference-text').placeholder = upload ? '填写本项目参考音频的准确原文' : '音色库模式自动使用所选音色的原文，不使用此处内容';
+}
+document.querySelector('#voice-reference-source').addEventListener('change', updateVoiceSource);
+document.querySelector('#voice-service-voice').addEventListener('change', updateVoiceSource);
+let voiceCapabilities = { catalog: [], generationOptions: {} };
+function voiceCapabilityKey() {
+  return 'storyboard-voice-capabilities:' + document.querySelector('#voice-provider').value + ':' + document.querySelector('#voice-service-url').value;
+}
+function rememberVoiceCapabilities(result) {
+  voiceCapabilities = result.models || {};
+  try { localStorage.setItem(voiceCapabilityKey(), JSON.stringify({ models: result.models, voices: result.voices, savedAt: new Date().toISOString() })); } catch {}
+  document.querySelector('#voice-capability-note').textContent = '参数定义来自当前服务。';
+}
+async function restoreVoiceCapabilities() {
+  let cached;
+  try { cached = JSON.parse(localStorage.getItem(voiceCapabilityKey()) || 'null'); } catch {}
+  if (cached?.models) {
+    voiceCapabilities = cached.models; populateVoiceChoices(cached);
+    document.querySelector('#voice-capability-note').textContent = '当前显示上次成功读取的参数，连接恢复后可刷新。';
+  } else {
+    try {
+      voiceCapabilities = await (await fetch('/voice-capabilities.json')).json();
+      document.querySelector('#voice-capability-note').textContent = '当前显示本机已核验的参数定义；服务未连接时可编辑保存，生成仍需恢复连接。';
+    } catch { document.querySelector('#voice-capability-note').textContent = '未读取到模型参数，请启动 Yovoice 并点击测试连接。'; }
+  }
+  renderVoiceAdvanced();
+}
+let voiceGeneration = {};
+function renderVoiceAdvanced() {
+  const modelId = document.querySelector('#voice-service-model').value;
+  const model = voiceCapabilities.catalog?.find(item => item.id === modelId);
+  const family = model?.family || (modelId.startsWith('voxcpm2') ? 'voxcpm2' : modelId.startsWith('index-') ? 'index_tts2' : '');
+  const core = document.querySelector('#voice-core-options'); core.replaceChildren();
+  const names = { guidanceScale: '引导强度', inferenceSteps: '推理步数', seed: '随机种子（留空随机）', speed: '语速', emotionStrength: '情绪强度', emotionText: '情绪描述', text_chunk_size: '文本分段字数', text_chunk_mode: '分段方式', max_tokens: '最大生成长度', min_tokens: '最小生成长度', 'voxcpm2.chunk_strategy': '跨段衔接方式', retry_badcase: '自动重试异常结果', retry_badcase_max_times: '异常重试次数' };
+  const fields = family === 'voxcpm2' ? [['guidanceScale',.5,5,.1],['inferenceSteps',1,50,1],['seed',0,2147483647,1]] : family === 'index_tts2' ? [['speed',.5,2,.05],['emotionStrength',0,1,.05],['emotionText']] : [['seed',0,2147483647,1]];
+  function field(parent, key, definition, values, onChange) {
+    const label = document.createElement('label'); label.className = 'voice-field';
+    const title = document.createElement('span'); title.textContent = names[key] || key;
+    const control = document.createElement(definition.type === 'select' ? 'select' : 'input'); control.dataset.voiceOption = key;
+    if (definition.type === 'select') { const empty = document.createElement('option'); empty.value = ''; empty.textContent = '服务默认'; control.append(empty); for (const value of definition.values || []) { const option = document.createElement('option'); option.value = value; option.textContent = value; control.append(option); } }
+    else { control.type = definition.type === 'boolean' ? 'checkbox' : definition.type === 'text' ? 'text' : 'number'; if (control.type === 'number') { control.min = definition.min; control.max = definition.max; control.step = definition.step || 'any'; control.placeholder = `默认：${definition.default ?? '服务默认'}`; } }
+    if (control.type === 'checkbox') control.checked = values[key] ?? definition.default; else control.value = values[key] ?? '';
+    control.addEventListener('change', () => { if (!control.checkValidity()) { control.reportValidity(); return; } if (control.type === 'checkbox') values[key] = control.checked; else if (control.value === '') delete values[key]; else values[key] = control.type === 'number' ? Number(control.value) : control.value; onChange?.(); });
+    label.append(title, control); parent.append(label);
+  }
+  for (const [key,min,max,step] of fields) field(core,key,{type:min === undefined ? 'text':'number',min,max,step},voiceGeneration);
+  const advanced = document.querySelector('#voice-model-advanced'); advanced.replaceChildren();
+  if (family) {
+    voiceGeneration.modelOptions ||= {}; voiceGeneration.modelOptions[family] ||= {};
+    for (const option of voiceCapabilities.generationOptions?.[family] || []) field(advanced,option.key,option,voiceGeneration.modelOptions[family]);
+  }
+  const mode = document.querySelector('#voice-clone-mode');
+  mode.querySelector('[value="continuation"]').disabled = family !== 'voxcpm2';
+  mode.value = voiceGeneration.voxMode || voiceGeneration.voiceMode || '';
+  mode.onchange = () => { delete voiceGeneration.voxMode; delete voiceGeneration.voiceMode; if(mode.value) voiceGeneration[family === 'voxcpm2' ? 'voxMode' : 'voiceMode'] = mode.value; };
+}
+document.querySelector('#voice-service-model').addEventListener('change', () => { voiceGeneration = {}; renderVoiceAdvanced(); });
 async function loadVoiceServiceSettings() {
   const settings = await api('/api/voice/settings');
   savedVoiceService = settings;
+  voiceGeneration = structuredClone(settings.generation || {});
   document.querySelector('#voice-provider').value = settings.provider;
   document.querySelector('#voice-service-url').value = settings.baseUrl;
+  populateVoiceChoices({ models: { installed: settings.modelId ? [{ id: settings.modelId }] : [] }, voices: settings.voiceId ? [{ id: settings.voiceId }] : [] });
+  document.querySelector('#voice-reference-source').value = settings.voiceId ? 'library' : 'upload';
   document.querySelector('#voice-service-model').value = settings.modelId;
   document.querySelector('#voice-service-voice').value = settings.voiceId;
   document.querySelector('#voice-service-speaker').value = settings.speaker;
   document.querySelector('#voice-service-token').placeholder = settings.hasToken ? '令牌已保存，留空保持不变' : '粘贴 Yovoice 设置中的访问令牌';
   document.querySelector('#voice-service-status').textContent = '设置已读取；可测试连接后选择模型和音色。';
   updateVoiceServiceFields();
+  renderVoiceAdvanced();
+  await restoreVoiceCapabilities();
+  if (settings.provider !== 'voxcpm' && settings.hasToken) {
+    try {
+      const result = await api('/api/voice/test', { method: 'POST', body: '{}' });
+      rememberVoiceCapabilities(result); renderVoiceAdvanced();
+      populateVoiceChoices(result);
+    } catch (error) { document.querySelector('#voice-service-status').textContent = `已保留配音设置；读取本机模型能力失败：${error.message}`; }
+  }
 }
 async function saveVoiceServiceSettings() {
+  for (const input of document.querySelectorAll('#voice-advanced-settings input')) {
+    if (!input.checkValidity()) { input.reportValidity(); throw Error('请检查高级参数的取值范围'); }
+  }
   const settings = {
     provider: document.querySelector('#voice-provider').value,
     baseUrl: document.querySelector('#voice-service-url').value,
     token: document.querySelector('#voice-service-token').value,
     modelId: document.querySelector('#voice-service-model').value,
-    voiceId: document.querySelector('#voice-service-voice').value,
-    speaker: document.querySelector('#voice-service-speaker').value
+    voiceId: document.querySelector('#voice-reference-source').value === 'library' ? document.querySelector('#voice-service-voice').value : '',
+    speaker: document.querySelector('#voice-service-speaker').value,
+    generation: voiceGeneration
   };
   savedVoiceService = await api('/api/voice/settings', { method: 'POST', body: JSON.stringify(settings) });
   document.querySelector('#voice-service-token').value = '';
@@ -2857,11 +3227,12 @@ async function saveVoiceServiceSettings() {
   return savedVoiceService;
 }
 document.querySelector('#voice-provider').addEventListener('change', () => {
+  voiceGeneration = {}; renderVoiceAdvanced();
   const provider = document.querySelector('#voice-provider').value;
   document.querySelector('#voice-service-url').value = provider === 'voxcpm' ? 'https://voxcpm.modelbest.cn' : provider === 'yovoice-local' ? 'http://127.0.0.1:8080/v1' : '';
   for (const id of ['voice-service-token', 'voice-service-model', 'voice-service-voice', 'voice-service-speaker']) document.querySelector('#' + id).value = '';
   document.querySelector('#voice-service-token').placeholder = '填写该服务的访问令牌';
-  for (const id of ['voice-model-options', 'voice-saved-options']) document.querySelector('#' + id).replaceChildren();
+  populateVoiceChoices({});
   updateVoiceServiceFields();
 });
 document.querySelector('#voice-service-save').addEventListener('click', async () => {
@@ -2874,27 +3245,36 @@ document.querySelector('#voice-service-test').addEventListener('click', async ev
     await saveVoiceServiceSettings();
     document.querySelector('#voice-service-status').textContent = '正在检查连接…';
     const result = await api('/api/voice/test', { method: 'POST', body: '{}' });
-    const models = result.models?.installed || [];
-    const voices = Array.isArray(result.voices) ? result.voices : result.voices?.voices || [];
-    for (const [target, items] of [['voice-model-options', models], ['voice-saved-options', voices]]) {
-      const options = items.map(item => { const option = document.createElement('option'); option.value = item.id; option.label = item.name || item.id; return option; });
-      document.querySelector('#' + target).replaceChildren(...options);
-    }
+    rememberVoiceCapabilities(result);
+    renderVoiceAdvanced();
+    const models = voiceList(result.models?.installed, 'installed');
+    const voices = voiceList(result.voices, 'voices');
+    populateVoiceChoices(result);
     document.querySelector('#voice-service-status').textContent = `${result.message}；已安装模型 ${models.length} 个，已有音色 ${voices.length} 个。`;
   } catch (error) { document.querySelector('#voice-service-status').textContent = error.message; }
   finally { button.disabled = false; }
 });
+document.querySelector('#voice-auto-apply').addEventListener('change', async event => {
+  project.audio.autoApplyTiming = event.target.checked; queueSave();
+  if (!event.target.checked) return;
+  const take = project.audio.takes.find(item => item.id === project.audio.selectedId);
+  if (take && !['generating','aligning'].includes(project.audio.status)) {
+    await flushSave(); await voiceAction(take.timeline?.length ? 'apply-durations' : 'align');
+  }
+});
+document.querySelector('#voice-instruction').addEventListener('input', event => { project.audio.instruction = event.target.value; queueSave(); });
+document.querySelector('#voice-reference-text').addEventListener('input', event => { project.audio.referenceText = event.target.value; if (project.audio.reference) project.audio.reference.text = event.target.value; queueSave(); });
 document.querySelector("#voice-generate").addEventListener("click", async () => {
   let settings;
   try { settings = await saveVoiceServiceSettings(); } catch (error) { showToast(error.message, 'error'); return; }
   const destination = settings.provider === 'yovoice-local' ? '本机 Yovoice' : settings.provider === 'yovoice-api' ? '远程 Yovoice API' : 'VoxCPM 在线服务';
-  if (!confirm(`将台词和参考音频（如有）发送到${destination}（${settings.baseUrl}）生成配音，继续？`)) return;
+  if (settings.provider !== 'yovoice-local' && !confirm(`将台词和参考音频（如有）发送到${destination}（${settings.baseUrl}）生成配音，继续？`)) return;
   voiceAction("generate", {
     instruction: document.querySelector("#voice-instruction").value,
     referenceText: document.querySelector("#voice-reference-text").value
   });
 });
-document.querySelector("#voice-align").addEventListener("click", () => voiceAction("align"));
+document.querySelector("#voice-align").addEventListener("click", () => voiceAction("align", { force: true }));
 document.querySelector("#voice-apply").addEventListener("click", () => {
   const timeline = [...document.querySelectorAll(".timing-row")].map(row => ({
     shotId: row.dataset.shotId, text: row.querySelector("span").textContent,
@@ -3109,6 +3489,8 @@ document.querySelector("#lightbox-close").addEventListener("click", closeLightbo
 document.querySelector("#lightbox-upload").addEventListener("click", () => {
   if (lightboxShotId) chooseUpload(lightboxShotId);
 });
+document.querySelector('#presenter-play').addEventListener('click', playAnimatic);
+document.querySelector('#presenter-progress').addEventListener('input', event => seekAnimatic(Number(event.target.value)));
 document.querySelector("#presenter-close").addEventListener("click", closePresenter);
 document.querySelector("#presenter-prev").addEventListener("click", () => movePresenter(-1));
 document.querySelector("#presenter-next").addEventListener("click", () => movePresenter(1));
@@ -3227,3 +3609,41 @@ document.querySelector("#style-apply").addEventListener("click", openStyleApplyD
 document.querySelector("#style-apply-confirm").addEventListener("click", applyStyleToProject);
 
 route();
+
+
+async function openImageGenerationSettings() {
+  try {
+    const value = await api('/api/generation/settings');
+    document.querySelector('#image-max-concurrency').value = value.maxConcurrency;
+    document.querySelector('#image-auto-concurrency').checked = value.autoAdjust;
+    document.querySelector('#image-concurrency-status').textContent = `当前执行上限 ${value.effectiveConcurrency}，正在生成 ${value.activeCount} 张`;
+    document.querySelector('#image-settings-dialog').showModal();
+  } catch(error) { showToast(error.message, 'error'); }
+}
+document.querySelectorAll('[data-image-settings]').forEach(button => button.addEventListener('click', openImageGenerationSettings));
+document.querySelector('#image-settings-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    const result = await api('/api/generation/settings', { method:'POST', body:JSON.stringify({maxConcurrency:Number(document.querySelector('#image-max-concurrency').value),autoAdjust:document.querySelector('#image-auto-concurrency').checked}) });
+    document.querySelector('#image-settings-dialog').close();
+    showToast(`图片生成设置已保存，当前执行上限 ${result.effectiveConcurrency}`);
+  } catch(error) { showToast(error.message, 'error'); }
+});
+
+let imageRevisionShotId = '';
+function openImageRevisionDialog(shot) {
+  imageRevisionShotId = shot.id;
+  document.querySelector('#image-revision-preview').src = shot.referenceImageUrl;
+  document.querySelector('#image-revision-notes').value = '';
+  document.querySelector('#image-revision-error').textContent = '';
+  document.querySelector('#image-revision-dialog').showModal();
+  document.querySelector('#image-revision-notes').focus();
+}
+document.querySelector('#image-revision-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const shot = project?.shots.find(item => item.id === imageRevisionShotId);
+  if (!shot || !shot.referenceImageUrl) { document.querySelector('#image-revision-error').textContent = '镜头或当前图片已变化，请关闭后重试。'; return; }
+  const notes = document.querySelector('#image-revision-notes').value.trim();
+  document.querySelector('#image-revision-dialog').close();
+  await runShotImages([shot.id], 'reference', true, true, notes);
+});

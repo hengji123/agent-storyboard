@@ -3,7 +3,24 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findWindowsBinary, findWhisperModel } from "../runtime.mjs";
+import { findWindowsBinary, findWhisperModel, resolveRuntimeHome } from "../runtime.mjs";
+import { runtimeHome as bundledRuntimeHome } from '../plugins/agent-storyboard/app/runtime.mjs';
+import { runtimeHome } from '../runtime.mjs';
+
+test('MCP bundled server and development server share installed voice tools', () => {
+  assert.equal(bundledRuntimeHome, runtimeHome, 'bundled server must use the same FFmpeg and forced-aligner runtime');
+});
+test('bundled app resolves shared runtime without depending on launch directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'storyboard-shared-runtime-'));
+  try {
+    const shared=join(root,'.runtime-voice'); await mkdir(shared);
+    const app=join(root,'plugins','agent-storyboard','app'); await mkdir(app,{recursive:true});
+    assert.equal(resolveRuntimeHome(app,''),shared);
+    assert.equal(resolveRuntimeHome(app,join(root,'override')),join(root,'override'));
+    await mkdir(join(app,'.runtime-voice'));
+    assert.equal(resolveRuntimeHome(app,''),join(app,'.runtime-voice'));
+  } finally { await rm(root,{recursive:true,force:true}); }
+});
 
 test("finds FFmpeg binaries installed through WinGet", async () => {
   const root = await mkdtemp(join(tmpdir(), "codex-runtime-"));

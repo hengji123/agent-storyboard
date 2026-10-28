@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { splitVoiceText, generateVoice, audioDuration } from "../audio.mjs";
-import { run, ffmpeg } from "../runtime.mjs";
+import { run, ffmpeg, ffprobe } from "../runtime.mjs";
 
 const sentence = "这是一句用来测试分段的话，长度大约二十个字左右。";
 
@@ -44,7 +44,10 @@ function wavBytes(seconds, sampleRate = 16000) {
 }
 
 test("every chunk is generated from the same original reference and the pieces are stitched together", async (t) => {
-  try { await run(ffmpeg, ["-version"], 5000); } catch { return t.skip("需要 FFmpeg"); }
+  try {
+    await run(ffmpeg, ["-version"], 5000);
+    await run(ffprobe, ["-version"], 5000);
+  } catch { return t.skip("需要 FFmpeg 和 FFprobe"); }
   const directory = await mkdtemp(join(tmpdir(), "agent-storyboard-voice-"));
   const calls = [];
   const service = createServer(async (request, response) => {

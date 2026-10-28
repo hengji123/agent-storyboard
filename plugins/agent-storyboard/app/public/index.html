@@ -70,9 +70,10 @@
           <svg class="btn-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.8"/><circle cx="6" cy="6.3" r="1.2"/><path d="m2.6 12 3.4-3.2 2.4 2.1 2-1.8 3 2.9"/></svg>
           <span class="tool-label collapsible">封面</span>
         </button>
+        <button type="button" class="tool-button" data-image-settings title="图片生成设置">生图设置</button>
         <button id="generate-all" class="tool-button" type="button" title="把所有待生成的镜头加入队列">
           <svg class="btn-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 9.5 6.5 14.2 8 9.5 9.5 8 14.2 6.5 9.5 1.8 8 6.5 6.5Z"/></svg>
-          <span class="tool-label">批量静态参考图</span>
+          <span class="tool-label">批量分镜画面</span>
           <span class="tool-count" hidden></span>
         </button>
         <button id="generate-all-blocking" class="tool-button" type="button" title="生成缺失或需要更新的镜头调度图"><span>批量镜头调度图</span><span class="tool-count" hidden></span></button>
@@ -315,18 +316,26 @@
                 <label class="voice-field"><span>服务地址</span><input id="voice-service-url" placeholder="http://127.0.0.1:8080/v1" autocomplete="off" /></label>
                 <label class="voice-field" id="voice-token-field"><span>访问令牌</span><input id="voice-service-token" type="password" autocomplete="new-password" placeholder="粘贴 Yovoice 设置中的访问令牌" /><small>仅保存在本机配置文件中，不写入项目或 Git；已保存时留空保留原令牌。</small></label>
                 <div id="voice-yovoice-options">
-                  <label class="voice-field"><span>模型 ID</span><input id="voice-service-model" list="voice-model-options" placeholder="测试连接后选择；留空使用 Yovoice 默认模型" /><datalist id="voice-model-options"></datalist></label>
-                  <label class="voice-field"><span>音色 ID</span><input id="voice-service-voice" list="voice-saved-options" placeholder="已有音色 ID；留空可使用下方参考音频" /><datalist id="voice-saved-options"></datalist></label>
+                  <label class="voice-field"><span>模型</span><select id="voice-service-model"><option value="">服务默认模型</option></select></label>
+                  <label class="voice-field"><span>参考声音来源</span><select id="voice-reference-source"><option value="library">Yovoice 音色库</option><option value="upload">本项目上传的参考音频</option></select></label>
+                  <label class="voice-field"><span>音色库音色</span><select id="voice-service-voice"><option value="">请选择音色</option></select><small id="voice-library-note">选择音色时自动使用音色库保存的参考原文。</small></label>
                   <label class="voice-field"><span>预设说话人（可选）</span><input id="voice-service-speaker" placeholder="仅用于支持内置说话人的模型" /></label>
                 </div>
+                <details id="voice-advanced-settings"><summary>声音生成方式与高级设置</summary>
+                  <label class="voice-field"><span>生成方式</span><select id="voice-clone-mode"><option value="">自动选择</option><option value="design">声音设计（不使用参考音频）</option><option value="clone">音色克隆</option><option value="continuation">精细克隆（需准确参考原文，VoxCPM2）</option></select></label>
+                  <div id="voice-core-options"></div>
+                  <details open><summary>模型专属参数</summary><p id="voice-capability-note" role="status"></p><div id="voice-model-advanced"></div></details>
+                  <small>参数会保存并沿用。留空使用服务默认；模型专属参数在读取模型后显示。精细克隆沿用参考音频的表达，声音描述不参与该模式。</small>
+                </details>
                 <div class="voice-actions"><button id="voice-service-save" type="button" class="secondary">保存配音设置</button><button id="voice-service-test" type="button" class="secondary">测试连接 / 读取模型音色</button></div>
                 <p id="voice-service-status" role="status" aria-live="polite">正在读取设置…</p>
-                <small>本地 Yovoice 需开启「本机接口」，保持应用运行。远程 API 使用 Yovoice 协议。上传的参考音频会导入所选服务；填写已有音色 ID 时优先使用该音色。</small>
+                <small>本地 Yovoice 需开启「本机接口」，保持应用运行。远程 API 使用 Yovoice 协议。音色库模式使用该音色及其保存的原文；上传模式只使用本项目音频及下方原文，两者不会混用。</small>
               </fieldset>
               <div class="voice-compose-heading">
                 <p>可选地描述声音，或上传一段参考音频。</p>
                 <button id="voice-generate" class="primary" type="button">生成配音</button>
               </div>
+              <label class="voice-auto-apply"><input id="voice-auto-apply" type="checkbox" checked /> 生成后按原台词定位时间并应用镜头时长</label>
               <label class="voice-field">
                 <span>声音描述 <small>可选</small></span>
                 <input id="voice-instruction" placeholder="自然、清晰的普通话" maxlength="1000" />
@@ -368,7 +377,17 @@
 
     <section id="storyboard-panel" class="project-panel storyboard-panel">
       <div class="board-toolbar">
-        <details class="pacing-panel"><summary id="pacing-summary">节奏检查</summary><ul id="pacing-results"></ul></details>
+        <details class="pacing-panel"><summary id="pacing-summary">剪辑节奏</summary>
+          <p class="pacing-explanation">纪录片 / 叙事动画辅助检查：结合景别序列、动作设计、镜头时长和当前配音。以下为核对线索，不是艺术评分；连续 B-ROLL、长镜头本身不构成问题。</p>
+          <ul id="pacing-results"></ul>
+          <details class="pacing-editorial"><summary>剪辑师复核重点与依据</summary>
+            <p>情绪与叙事优先：每一刀是否推进信息、关系或情绪？切出时，动作与反应是否完成？留白是否有目的？</p>
+            <p>节奏：长短镜头的变化是否服务段落发展？旁白可跨镜，不必每句话都切镜；在重音、停顿或动作节拍试听切点。</p>
+            <p>视觉与连续性：检查注意力落点、视线、运动方向、轴线与空间关系。当前检测不解析画面内容，不能自动确认这些关系正确。</p>
+            <p>辅助阈值：不足 1 秒、无动作设计且停留至少 10 秒、连续 4 镜同景别、邻镜时长差至少 4 秒且倍率至少 4、估算语速超过 6 字/秒。均为本工具初筛默认值，不是行业合格线；实际配音时间轴优先于字数估算。</p>
+            <a href="https://www.adobe.com/creativecloud/video/discover/edit-a-video.html" target="_blank" rel="noopener">参考：Adobe 剪辑原则与 Murch 六原则</a>
+          </details>
+        </details>
         <div class="board-tools">
           <button id="bulk-edit-shots" class="secondary compact-button" type="button">批量修改镜头信息</button>
           <input id="shot-search" class="shot-search" type="search" placeholder="搜索台词 / 画面 / 动作 / 调度" aria-label="搜索镜头" />
@@ -394,7 +413,7 @@
             <th>镜头信息 <button id="bulk-edit-shots-header" class="header-bulk-edit" type="button" title="批量修改类型、媒体、时长和生成方式">批量修改</button></th>
             <th>旁白 / 对白</th>
             <th>画面与导演设计</th>
-            <th>静态参考图 / 素材</th>
+            <th>分镜画面 / 素材</th>
             <th></th>
           </tr>
         </thead>
@@ -454,7 +473,7 @@
       </td>
       <td class="shot-info-cell">
         <div class="shot-info-fields">
-        <div data-select-field="rollType"></div>
+        <div data-select-field="shotSize"></div>
         <div data-select-field="mediaType"></div>
         <div class="duration-input">
           <input data-field="duration" type="number" min="0" step="0.5" />
@@ -466,10 +485,19 @@
       <td class="shot-dialogue-cell"><textarea data-field="dialogue" aria-label="旁白或对白" placeholder="输入这一镜的旁白或对白"></textarea></td>
       <td class="shot-director-cell">
         <label class="shot-field"><span>静态画面 / 生成提示词</span><textarea data-field="visualPrompt" placeholder="主体、构图、景别、光影与风格"></textarea></label>
+            <section class="shot-reference-assets">
+              <strong>引用参考图</strong><span class="reference-asset-status" role="status"></span>
+              <div class="reference-asset-list"></div>
+              <button type="button" class="secondary reference-asset-add">＋ 选择参考图片</button>
+              <button type="button" class="secondary reference-assets-confirm">确认引用</button>
+              <button type="button" class="secondary reference-assets-none">本镜无需参考图</button>
+              <input type="file" class="reference-asset-file" accept="image/png,image/jpeg,image/webp" multiple hidden />
+            </section>
         <p class="action-brief"></p>
         <details class="shot-director-details">
           <summary>导演详情 <span class="director-completeness"></span></summary>
           <div class="director-detail-body">
+
             <label class="shot-field"><span>动作描述</span><textarea data-field="actionDescription" placeholder="起始状态 → 主体动作与视线 → 节奏 → 结束状态"></textarea></label>
             <section class="blocking-diagram">
               <div class="blocking-heading"><strong>镜头调度图</strong><span>机位 · 站位 · 视线 · 路线 · 轴线</span></div>
@@ -487,8 +515,8 @@
           <div class="preview-slot"></div>
           <div class="generation-controls">
             <span class="generation-status"></span>
-            <button class="generate-shot" type="button">生成静态参考图</button>
-            <button class="secondary compact-button reference-upload" type="button">上传参考图</button>
+            <button class="generate-shot" type="button">生成分镜画面</button>
+            <button class="secondary compact-button reference-upload" type="button">上传分镜画面</button>
             <input class="reference-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
           </div>
         </div>
@@ -509,13 +537,13 @@
         <div id="bulk-shot-list"></div>
       </section>
       <div class="bulk-shot-fields">
-        <label class="form-field"><span>镜头类型</span><select id="bulk-shot-rollType"><option value="">保持不变</option><option value="A-ROLL">A-ROLL</option><option value="B-ROLL">B-ROLL</option></select></label>
+        <label class="form-field"><span>景别</span><select id="bulk-shot-shotSize"><option value="">保持不变</option><option value="大远景">大远景</option><option value="远景">远景</option><option value="大全景">大全景</option><option value="全景">全景</option><option value="中全景">中全景</option><option value="中景">中景</option><option value="中近景">中近景</option><option value="近景">近景</option><option value="特写">特写</option><option value="大特写">大特写</option></select></label>
         <label class="form-field"><span>媒体类型</span><select id="bulk-shot-mediaType"><option value="">保持不变</option><option value="image">图片</option><option value="video">视频</option></select></label>
-        <label class="form-field"><span>时长（秒）</span><input id="bulk-shot-duration" type="number" min="0" step="0.5" placeholder="留空保持不变" /></label>
+        <label class="form-field"><span>时长（秒）</span><input id="bulk-shot-duration" type="number" min="0" step="any" placeholder="留空保持不变，支持小数秒" /></label>
         <label class="form-field"><span>生成方式</span><select id="bulk-shot-generator"><option value="">保持不变</option><option value="image-gen">AI 生图</option><option value="manual">手动素材</option><option value="hyperframes">HyperFrames 动效</option><option value="remotion">Remotion 动效</option></select></label>
       </div>
       <p id="bulk-shot-summary" role="status"></p>
-      <small>仅应用明确填写的参数。旁白、画面、动作、调度和已有图片会保留；此操作不会发起生成。</small>
+      <small>仅应用明确填写的参数。旁白、画面和已有图片会保留。修改媒体或生成方式会取消对应的旧参数排队任务；正在生成的镜头会跳过并列明，不影响其他镜头保存。</small>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>取消</button><button id="bulk-shot-submit" type="submit" class="primary" disabled>应用修改</button></div>
     </form>
   </dialog>
@@ -636,9 +664,13 @@
         <button id="presenter-close" class="lightbox-close" type="button" aria-label="关闭演示">×</button>
       </div>
     </div>
-    <button id="presenter-prev" class="presenter-nav prev" type="button" aria-label="上一个镜头">‹</button>
-    <div id="presenter-stage" class="presenter-stage"></div>
-    <button id="presenter-next" class="presenter-nav next" type="button" aria-label="下一个镜头">›</button>
+    <div class="presenter-screen">
+      <div id="presenter-stage" class="presenter-stage"></div>
+      <div id="presenter-subtitle" class="presenter-subtitle" hidden></div>
+      <button id="presenter-prev" class="presenter-nav prev" type="button" aria-label="上一个镜头">‹</button>
+      <button id="presenter-next" class="presenter-nav next" type="button" aria-label="下一个镜头">›</button>
+    </div>
+    <div class="presenter-playback"><button id="presenter-play" type="button">播放</button><input id="presenter-progress" type="range" min="0" max="1" step="0.01" value="0" aria-label="连续预览进度" /><span id="presenter-time"></span><small id="presenter-audio-note"></small></div>
     <div class="presenter-notes">
       <span>内容描述</span>
       <p id="presenter-description"></p>
@@ -720,6 +752,31 @@
   <input id="project-design-upload" type="file" accept=".md,text/markdown,text/plain" hidden />
   <input id="design-upload" type="file" accept=".md,text/markdown,text/plain" hidden />
   <div id="select-portal"></div>
+
+
+  <dialog id="image-revision-dialog" class="form-dialog">
+    <form id="image-revision-form">
+      <h2>修改分镜画面</h2>
+      <img id="image-revision-preview" alt="当前版本" style="display:block;max-width:100%;max-height:240px;object-fit:contain;margin-bottom:16px" />
+      <label class="form-field"><span>修改意见</span><textarea id="image-revision-notes" rows="5" maxlength="4000" placeholder="例如：人物头部偏大，缩小一些；衣服改为纽扣款，其他部分保留。"></textarea></label>
+      <p>填写后会结合当前图片与镜头设计修改；留空则按最新镜头设计重新生成。旧图和历史版本会保留，成功后才更新当前图片。提交会使用图片生成额度。</p>
+      <p id="image-revision-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>取消</button><button id="image-revision-submit" type="submit" class="primary">提交生成</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="image-settings-dialog" class="form-dialog">
+    <form id="image-settings-form">
+      <h2>图片生成设置</h2>
+      <label class="form-field"><span>最高并发数</span><input id="image-max-concurrency" type="number" min="1" max="8" step="1" required /></label>
+      <label class="form-field"><span><input id="image-auto-concurrency" type="checkbox" /> 开启自动调节并发</span></label>
+      <p>关闭时按最高并发执行。开启时从最多2个开始，遇到限流或临时错误降低，冷却后连续成功逐步恢复，不超过最高并发。调低不会中断正在生成的图片。</p>
+      <p id="image-concurrency-status" role="status"></p>
+      <p>设置保存在本机，适用于所有项目，保存后无需重启。</p>
+      <div class="dialog-actions"><button type="button" data-close-dialog class="secondary">取消</button><button type="submit" class="primary">保存设置</button></div>
+    </form>
+  </dialog>
+
   <dialog id="environment-dialog" class="form-dialog environment-dialog">
     <form method="dialog">
       <div class="dialog-heading">
@@ -736,6 +793,7 @@
           <span id="environment-summary-detail">检查配音服务、FFmpeg 和本机 Agent</span>
         </div>
       </div>
+      <button type="button" class="secondary" data-image-settings>图片生成设置</button>
       <div id="environment-results" class="environment-list" aria-live="polite"></div>
       <div class="dialog-actions">
         <button class="secondary" type="submit">完成</button>

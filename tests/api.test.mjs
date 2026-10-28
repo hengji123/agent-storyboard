@@ -57,6 +57,29 @@ test("project persistence, conflict detection, generation cancellation and recov
     const bulkSnapshot = bulkResult.data.project;
     await request(`/api/projects/${bulkProject.id}/shots/${bulkIds[0]}`, 'PATCH', { notes: 'Another editor changed this' });
     assert.equal((await request(bulkPath, 'PATCH', { shotIds: bulkIds, fields: { duration: 4 }, updatedAt: bulkSnapshot.updatedAt, contentRevision: bulkSnapshot.contentRevision })).status, 409);
+    const queuedProject = (await request('/api/projects', 'POST', { shots: [
+      { mediaType: 'image', generator: 'image-gen', generationStatus: 'pending', generationTaskId: 'task-queued-example' },
+      { mediaType: 'image', generator: 'manual' }
+    ] })).data;
+    const queuedBulk = `/api/projects/${queuedProject.id}/shots/bulk`;
+    const queuedIds = queuedProject.shots.map(shot => shot.id);
+    const queuedUpdate = await request(queuedBulk, 'PATCH', { shotIds: queuedIds, fields: { mediaType: 'image', generator: 'image-gen' } });
+    assert.equal(queuedUpdate.status, 200, 'an unchanged queued shot must not block changing other shots');
+    assert.ok(queuedUpdate.data.project.shots.every(shot => shot.generator === 'image-gen'));
+    assert.equal(queuedUpdate.data.project.shots[0].generationTaskId, 'task-queued-example');
+    const changedQueue = await request(queuedBulk, 'PATCH', { shotIds: queuedIds, fields: { mediaType: 'video' } });
+    assert.equal(changedQueue.status, 200);
+    assert.deepEqual(changedQueue.data.cancelledTaskIds, ['task-queued-example']);
+    assert.equal(changedQueue.data.project.shots[0].generationTaskId, '');
+    assert.equal(changedQueue.data.project.shots[0].generationStatus, 'idle');
+    const now = new Date().toISOString();
+    await request(`/api/projects/${queuedProject.id}/shots/${queuedIds[0]}`, 'PATCH', { generationStatus: 'processing', generationTaskId: 'task-running-example', generationStartedAt: now, generationHeartbeatAt: now });
+    const mixed = await request(queuedBulk, 'PATCH', { shotIds: queuedIds, fields: { generator: 'manual' } });
+    assert.equal(mixed.status, 200);
+    assert.deepEqual(mixed.data.updatedShotIds, [queuedIds[1]]);
+    assert.equal(mixed.data.skippedShots[0].shotIndex, 1);
+    assert.equal(mixed.data.project.shots[0].generationTaskId, 'task-running-example');
+    assert.equal(mixed.data.project.shots[1].generator, 'manual');
     const diagram = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
     const diagramForm = new FormData();
     diagramForm.append('file', new Blob([diagram], { type: 'image/png' }), 'diagram.png');

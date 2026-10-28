@@ -1,12 +1,25 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, basename, resolve } from "node:path";
 import { voxcpmBase } from "./voxcpm.mjs";
 import { inspectVoiceProvider } from './voice-provider.mjs';
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL(".", import.meta.url));
-export const runtimeHome = process.env.AGENT_STORYBOARD_RUNTIME || join(root, ".runtime-voice");
+export function resolveRuntimeHome(appRoot, configured = process.env.AGENT_STORYBOARD_RUNTIME) {
+  if (configured?.trim()) return resolve(configured.trim());
+  const local = join(appRoot, '.runtime-voice');
+  if (existsSync(local)) return local;
+  // A source checkout contains a second app bundled for MCP. Both entry points
+  // must reuse the same installed tools and models, independent of cwd.
+  const directory = resolve(appRoot);
+  if (basename(directory) === 'app' && basename(dirname(dirname(directory))) === 'plugins') {
+    const shared = join(dirname(dirname(dirname(directory))), '.runtime-voice');
+    if (existsSync(shared)) return shared;
+  }
+  return local;
+}
+export const runtimeHome = resolveRuntimeHome(root);
 const localBinary = (name) => {
   const candidate = join(runtimeHome, name);
   return existsSync(candidate) ? candidate : null;
@@ -31,9 +44,9 @@ export function findWindowsBinary(name, localAppData = process.env.LOCALAPPDATA,
   } catch {}
   return null;
 }
-export function run(command, args, timeout = 15000) {
+export function run(command, args, timeout = 15000, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, shell: false, env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
+    const child = spawn(command, args, { windowsHide: true, shell: false, cwd: options.cwd, env: { ...process.env, PYTHONIOENCODING: "utf-8" } });
     let output = "";
     const timer = setTimeout(() => { child.kill(); reject(new Error(`${command}: 执行超时`)); }, timeout);
     child.stdout.on("data", data => { output = (output + data).slice(-16000); });
@@ -76,10 +89,9 @@ async function voiceServiceReachable(settings) {
 // 只列用户真正需要关心的东西：状态 ready（正常）/ missing（需要处理）/ info（未检测到，但不影响使用）。
 // Node、配音客户端这类已经内置的东西不再检查；Remotion、HyperFrames 属于 Agent 自己的能力，不是本机环境。
 export async function inspectEnvironment(voiceSettings) {
-  const [voiceOnline, ffmpegProbe, ffprobeProbe, whisperProbe, codex, codexLogin, claude] = await Promise.all([
+  const [voiceOnline, ffmpegProbe, whisperProbe, codex, codexLogin, claude] = await Promise.all([
     voiceServiceReachable(voiceSettings),
     probe(ffmpeg, ["-version"]),
-    probe(ffprobe, ["-version"]),
     probe(whisper, ["--help"]),
     probe("codex", ["--version"]),
     probe("codex", ["login", "status"]),
@@ -87,7 +99,7 @@ export async function inspectEnvironment(voiceSettings) {
   ]);
   const modelReady = existsSync(whisperModel);
   const whisperReady = whisperProbe.ok && modelReady;
-  const ffmpegReady = ffmpegProbe.ok && ffprobeProbe.ok;
+  const ffmpegReady = ffmpegProbe.ok;
   const imageReady = codex.ok && codexLogin.ok;
 
   const groups = [
@@ -100,7 +112,7 @@ export async function inspectEnvironment(voiceSettings) {
           : { id: "voice-service", name: "配音服务", status: "missing", detail: "无法连接所选配音服务，请在配音服务设置中检查地址、令牌和接口开关" },
         ffmpegReady
           ? { id: "ffmpeg", name: "FFmpeg", status: "ready", detail: firstLine(ffmpegProbe.output).replace(/ Copyright.*/, "") }
-          : { id: "ffmpeg", name: "FFmpeg", status: voiceSettings?.provider?.startsWith('yovoice') ? "info" : "missing", detail: "未检测到 FFmpeg 或 FFprobe。Yovoice 生成不依赖它；VoxCPM 转码和 Whisper 对齐需要它。" },
+          : { id: "ffmpeg", name: "FFmpeg", status: voiceSettings?.provider?.startsWith('yovoice') ? "info" : "missing", detail: "未检测到 FFmpeg。Yovoice 生成不依赖它；VoxCPM 转码和 Whisper 对齐需要它。" },
         whisperReady
           ? { id: "whisper", name: "台词对齐（Whisper）", status: "ready", detail: "已就绪" }
           : { id: "whisper", name: "台词对齐（Whisper）", status: "missing", detail: !whisperProbe.ok ? "未检测到 whisper-cli：用于把配音对齐到镜头台词，没有它仍可生成配音。macOS：brew install whisper-cpp" : `缺少识别模型：${whisperModel}` }

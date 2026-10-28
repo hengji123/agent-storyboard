@@ -1,3 +1,4 @@
+import { referenceInstructions } from './reference-assets.mjs';
 import { createHash } from 'node:crypto';
 export const IMAGE_KINDS = ['reference', 'blocking'];
 export const imageUrlKey = kind => kind === 'reference' ? 'referenceImageUrl' : 'blockingImageUrl';
@@ -9,6 +10,7 @@ export function normalizeImageGeneration(value = {}) {
       generationTaskId: String(item.generationTaskId || ''), generationError: String(item.generationError || ''),
       generationRequestedAt: item.generationRequestedAt || null, generationStartedAt: item.generationStartedAt || null,
       generationHeartbeatAt: item.generationHeartbeatAt || null, generationCompletedAt: item.generationCompletedAt || null,
+      revisionNotes: String(item.revisionNotes || ''), revisionBaseUrl: String(item.revisionBaseUrl || ''),
       sourceHash: String(item.sourceHash || ''), requestHash: String(item.requestHash || ''),
       runner: item.runner === 'local' ? 'local' : 'agent', version: Number(item.version) || 0,
       history: Array.isArray(item.history) ? item.history : []
@@ -17,7 +19,8 @@ export function normalizeImageGeneration(value = {}) {
 }
 export function imageSourceHash(project, shot, kind) {
   return createHash('sha256').update(JSON.stringify([
-    project.aspectRatio, project.designRevision || '', shot.visualPrompt || '', shot.actionDescription || '', shot.notes || '',
+    shot.imageGeneration?.[kind]?.revisionNotes || '', shot.imageGeneration?.[kind]?.revisionBaseUrl || '',
+    shot.shotSize || '', shot.referenceMode || 'images', shot.referenceAssets || [], shot.referencesReviewed || false, project.aspectRatio, project.designRevision || '', shot.visualPrompt || '', shot.actionDescription || '', shot.notes || '',
     ...(kind === 'blocking' ? [shot.blockingDescription || '', shot.referenceImageUrl || '', shot.imageGeneration?.reference?.version || 0] : [])
   ])).digest('hex');
 }
@@ -50,11 +53,14 @@ export function recordShotImage(project, shot, kind, url) {
   item.sourceHash = imageSourceHash(project, shot, kind);
   item.generationStatus = 'ready'; item.generationError = '';
   item.generationCompletedAt = new Date().toISOString();
-  item.history.push({ version: item.version, url, sourceHash: item.sourceHash, createdAt: item.generationCompletedAt });
+  item.history.push({ version: item.version, url, sourceHash: item.sourceHash, revisionNotes: item.revisionNotes, revisionBaseUrl: item.revisionBaseUrl, createdAt: item.generationCompletedAt });
   if (kind === 'reference' && shot.imageGeneration.blocking.generationStatus === 'pending') shot.imageGeneration.blocking.requestHash = imageSourceHash(project, shot, 'blocking');
 }
 export function imagePrompt(shot, kind) {
-  const context = shot.notes ? `\n\n制作约束与资产索引（以已确认资料为准）：${shot.notes}` : '';
+  const references = `\n明确景别：${shot.shotSize || '未指定，按画面描述确认'}。静态成片严格采用此景别，调度图标明对应取景范围。` + referenceInstructions(shot, kind);
+  const revision = shot.imageGeneration?.[kind];
+  const revisionText = revision?.revisionNotes ? `\n\n本次修改意见：${revision.revisionNotes}\n附件中的上一版图片用于局部修改；保留未要求修改的身份、服装、画风与构图，若本镜最新设计另有明确要求，以最新设计和本次修改意见为准。` : '';
+  const context = revisionText + references + (shot.notes ? `\n\n制作约束与资产索引（以已确认资料为准）：${shot.notes}` : '');
   if (kind === 'reference') return `生成本镜的静态成品参考图，锁定起始构图与主体身份。只生成单张画面，不添加机位箭头、路线、分镜表或说明文字。\n\n画面：${shot.visualPrompt}\n\n本镜动作（用于理解起始状态，不把多个动作拼成组图）：${shot.actionDescription || '无'}${context}`;
   return `生成独立的导演镜头调度工作图，不是成品效果图。清楚表示机位/朝向、人物与关键物站位、视线、动作路线、轴线及必要的起止状态。按描述选用简明俯视图或示意图，用简短中文标签和箭头说明，避免精美插画掩盖空间关系。参考图仅用于空间/身份依据。\n\n场景：${shot.visualPrompt}\n\n动作：${shot.actionDescription || '无'}\n\n调度要求：${shot.blockingDescription}${context}`;
 }

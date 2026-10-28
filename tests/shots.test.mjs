@@ -56,6 +56,9 @@ test("pacing details point at the shots involved and match the plain messages", 
   const roll = { rollType: "A-ROLL", duration: 5, dialogue: "" };
   const list = [roll, roll, roll, { ...roll, rollType: "B-ROLL", duration: 20 }];
   const detailed = inspectPacingDetailed(list);
-  assert.deepEqual(detailed.map((item) => item.indexes), [[0, 1, 2], [3]]);
+  assert.deepEqual(detailed.map((item) => ({ code: item.code, indexes: item.indexes })), [
+    { code: "unmotivated-hold", indexes: [3] },
+    { code: "duration-contrast", indexes: [2, 3] }
+  ]);
   assert.deepEqual(inspectPacing(list), detailed.map((item) => item.message));
 });

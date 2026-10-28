@@ -31,7 +31,7 @@ const el = (tag, className, text) => {
 let signature;
 let dispose = () => {};
 
-export function renderVoicePlayer(project, busy, selectVersion) {
+export function renderVoicePlayer(project, busy, selectVersion, deleteVersion) {
   const audio = project?.audio || { takes: [] };
   const takes = audio.takes || [];
   const take = takes.find(item => item.id === audio.selectedId);
@@ -57,6 +57,10 @@ export function renderVoicePlayer(project, busy, selectVersion) {
   });
   switcher.append(summary, menu);
   if (takes.length > 1) switchRoot.append(switcher);
+  if (take && deleteVersion) {
+    const remove = el('button', 'secondary compact-button', '删除此版本'); remove.type = 'button'; remove.disabled = busy;
+    remove.onclick = () => deleteVersion(take.id); switchRoot.append(remove);
+  }
   if (!take?.url) {
     versionRoot.append(el('p', 'voice-player-empty', '展开“生成新版本”，开始制作口播。'));
     timelineRoot.append(el('p', 'voice-player-empty', '生成并识别配音后，在这里试听和调整台词。'));
@@ -77,7 +81,7 @@ export function renderVoicePlayer(project, busy, selectVersion) {
     const seconds = player.currentTime;
     const percent = duration > 0 ? Math.min(100, seconds / duration * 100) : 0;
     for (const view of views) {
-      view.button.innerHTML = icon(!player.paused);
+      if (view.playing !== !player.paused) { view.button.innerHTML = icon(!player.paused); view.playing = !player.paused; }
       view.button.setAttribute('aria-label', player.paused ? '播放配音' : '暂停配音');
       view.button.setAttribute('aria-pressed', String(!player.paused));
       view.track.style.setProperty('--progress', `${percent}%`);
@@ -226,7 +230,7 @@ export function renderVoicePlayer(project, busy, selectVersion) {
       cards.push({ row, seek, ...inputs });
     });
     timelineRoot.append(segments);
-  } else timelineRoot.append(el('p', 'voice-player-empty', '识别后，台词片段会显示在这里。'));
+  } else timelineRoot.append(el('p', 'voice-player-empty', '定位后，原台词片段会显示在这里。'));
   function tick() { sync(); if (!player.paused) frame = requestAnimationFrame(tick); }
   player.onplay = () => { cancelAnimationFrame(frame); tick(); };
   player.onpause = () => { cancelAnimationFrame(frame); sync(); };

@@ -13,3 +13,4 @@ data/projects.json.*.tmp
 data/projects/
 data/media/
 data/storyboard.json
+data/image-generation-settings.json

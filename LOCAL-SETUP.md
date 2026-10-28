@@ -1,6 +1,6 @@
 # 本地部署
 
-源码目录：`F:\SEESEA\充电宝\agent-storyboard`。
+源码目录：`F:\导演台\agent-storyboard`。
 
 ## 启动与数据
 

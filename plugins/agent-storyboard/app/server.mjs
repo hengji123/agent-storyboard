@@ -1,3 +1,8 @@
+import { ImageConcurrency, validateGenerationSettings } from './image-concurrency.mjs';
+import { createAssetJobs } from './reference-autofill.mjs';
+import { syncPromptReferences } from './public/reference-sync.js';
+import { SHOT_SIZES, normalizeShotSize } from './shot-size.mjs';
+import { normalizeReferences, referencesFor } from './reference-assets.mjs';
 import { defaultDataDir } from "./env-compat.mjs";
 import { createServer } from "node:http";
 import { expireTasks } from "./task-state.mjs";
@@ -215,6 +220,7 @@ function normalizeShot(shot = {}) {
 
   return {
     id: shot.id || createId("shot"),
+    shotSize: normalizeShotSize(shot),
     rollType: shot.rollType === "A-ROLL" ? "A-ROLL" : "B-ROLL",
     mediaType: shot.mediaType === "video" ? "video" : "image",
     duration: Number.isFinite(Number(shot.duration)) ? Number(shot.duration) : 5,
@@ -222,6 +228,10 @@ function normalizeShot(shot = {}) {
     timeStart: Number.isFinite(shot.timeStart) ? shot.timeStart : null,
     timeEnd: Number.isFinite(shot.timeEnd) ? shot.timeEnd : null,
     visualPrompt: String(shot.visualPrompt || ""),
+    referenceAssets: normalizeReferences(shot.referenceAssets),
+    referenceMode: shot.referenceMode === 'none' ? 'none' : 'images',
+    referenceExclusions: Array.isArray(shot.referenceExclusions) ? shot.referenceExclusions.map(String) : [],
+    referencesReviewed: shot.referenceMode === 'none' || shot.referencesReviewed === true,
     actionDescription: String(shot.actionDescription || ""),
     blockingDescription: String(shot.blockingDescription || ""),
     blockingImageUrl: String(shot.blockingImageUrl || ""),
@@ -277,6 +287,8 @@ function normalizeCovers(covers = {}) {
 
 function normalizeProject(project = {}) {
   const now = new Date().toISOString();
+  const shots = Array.isArray(project.shots) ? project.shots.map(normalizeShot) : [];
+  for (const shot of shots) syncPromptReferences(shot, shots);
   return {
     id: String(project.id || createId("project")),
     title: String(project.title || "未命名项目").trim() || "未命名项目",
@@ -288,7 +300,7 @@ function normalizeProject(project = {}) {
     designRevision: String(project.designRevision || ''),
     contentRevision: Number(project.contentRevision) || 0,
     covers: normalizeCovers(project.covers),
-    shots: Array.isArray(project.shots) ? project.shots.map(normalizeShot) : [],
+    shots,
     createdAt: project.createdAt || now,
     updatedAt: project.updatedAt || now
   };
@@ -322,6 +334,17 @@ async function saveProjectsIndex(index) {
   return index;
 }
 
+async function refreshReferenceHashes(project) {
+  let changed = false;
+  for (const shot of project.shots) for (const asset of shot.referenceAssets) {
+    let hash = 'missing';
+    if (isAbsolute(asset.path) && /\.(png|jpe?g|webp)$/i.test(asset.path)) {
+      try { hash = createHash('sha256').update(await readFile(asset.path)).digest('hex'); } catch {}
+    }
+    if (asset.contentHash !== hash) { asset.contentHash = hash; changed = true; }
+  }
+  return changed;
+}
 async function readProject(projectId) {
   if (!safeId(projectId)) throw Object.assign(new Error("Project not found"), { status: 404 });
   try {
@@ -340,7 +363,7 @@ async function readProject(projectId) {
       project.audio.error = "上次配音任务已中断，请重试";
       return saveProject(project);
     }
-    if (expireTasks(project) || syncShotImages(project)) return saveProject(project);
+    if (await refreshReferenceHashes(project) || expireTasks(project) || syncShotImages(project)) return saveProject(project);
     return project;
   } catch (error) {
     if (error.code === "ENOENT") throw Object.assign(new Error("Project not found"), { status: 404 });
@@ -350,8 +373,13 @@ async function readProject(projectId) {
 
 async function saveProject(project) {
   const next = normalizeProject({ ...project, updatedAt: new Date(Math.max(Date.now(), Date.parse(project.updatedAt || 0) + 1 || 0)).toISOString() });
+  await refreshReferenceHashes(next);
   const previous = await readFile(projectFile(next.id), 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  const contentKey = value => JSON.stringify([value.title, value.aspectRatio, value.scriptDraft, (value.shots || []).map(shot => [shot.id, shot.rollType, shot.mediaType, shot.duration, shot.dialogue, shot.visualPrompt, shot.actionDescription || '', shot.blockingDescription || '', shot.generator, shot.notes])]);
+  for (const shot of next.shots) {
+    const old = previous?.shots?.find(item => item.id === shot.id);
+    if (old && old.visualPrompt !== shot.visualPrompt && shot.referenceMode !== 'none') shot.referencesReviewed = false;
+  }
+  const contentKey = value => JSON.stringify([value.title, value.aspectRatio, value.scriptDraft, (value.shots || []).map(shot => [shot.id, shot.shotSize, shot.rollType, shot.mediaType, shot.duration, shot.dialogue, shot.visualPrompt, shot.referenceMode || 'images', shot.referenceAssets || [], shot.referenceExclusions || [], shot.referencesReviewed || false, shot.actionDescription || '', shot.blockingDescription || '', shot.generator, shot.notes])]);
   next.contentRevision = (Number(previous?.contentRevision) || 0) + (!previous || contentKey(previous) !== contentKey(next) ? 1 : 0);
   await mkdir(projectMediaDir(next.id), { recursive: true });
   next.hasDesign = await exists(projectDesignFile(next.id));
@@ -681,7 +709,7 @@ async function buildProjectDocx(project) {
     rows.push(`<w:tr><w:trPr><w:cantSplit/></w:trPr>${[
       docxCellXml([
         docxParagraphXml(String(shotNumber).padStart(2, "0"), { alignment: "center", bold: true }),
-        docxParagraphXml(shot.rollType || "B-ROLL", { alignment: "center", bold: true }),
+        docxParagraphXml(shot.shotSize || "待指定景别", { alignment: "center", bold: true }),
         docxParagraphXml(`${Number(shot.duration || 0)}s`, { alignment: "center", bold: true })
       ], columnWidths[0], "F8FAFC"),
       docxCellXml(await docxMediaParagraphsXml(project, shot.referenceImageUrl ? { ...shot, mediaUrl: shot.referenceImageUrl, mediaType: 'image' } : shot, shotNumber, mediaFiles), columnWidths[1]),
@@ -777,6 +805,7 @@ function generationTask(project, item, type = "shot") {
     status: item.generationStatus,
     generator: isCover ? "image-gen" : item.generator,
     mediaType: isCover ? "image" : item.mediaType,
+    shotSize: isCover ? null : item.shotSize,
     rollType: isCover ? null : item.rollType,
     duration: isCover ? 0 : item.duration,
     dialogue: isCover ? item.title : item.dialogue,
@@ -797,6 +826,7 @@ function shotImageTask(project, shot, kind) {
   const task = generationTask(project, { ...shot, ...state }, 'shot');
   return { ...task, taskType: kind, imageKind: kind, generator: 'image-gen', mediaType: 'image',
     visualPrompt: imagePrompt(shot, kind), sourceHash: state.requestHash, version: state.version + 1, runner: state.runner,
+    referenceImagePaths: [...referencesFor(shot, kind).map(item => item.path), ...(state.revisionBaseUrl ? [join(projectMediaDir(project.id), basename(mediaFileNameFromUrl(state.revisionBaseUrl)))] : []), ...(kind === 'blocking' && shot.referenceImageUrl ? [join(projectMediaDir(project.id), basename(mediaFileNameFromUrl(shot.referenceImageUrl)))] : [])],
     referenceImagePath: kind === 'blocking' && shot.referenceImageUrl ? join(projectMediaDir(project.id), basename(mediaFileNameFromUrl(shot.referenceImageUrl))) : null
   };
 }
@@ -811,13 +841,21 @@ async function finishShotImage(found, sourcePath) {
   recordShotImage(project, shot, kind, mediaUrl(project.id, fileName));
 }
 
-let imageWorkerRunning = false;
+const imageSettingsPath = join(dataDir, 'image-generation-settings.json');
+let initialImageSettings;
+try { initialImageSettings = validateGenerationSettings(JSON.parse(await readFile(imageSettingsPath, 'utf8'))); }
+catch(error) { if (error.code !== 'ENOENT') console.error('图片并发设置读取失败，使用默认设置:', error.message); }
+const imageConcurrency = new ImageConcurrency(initialImageSettings);
+function publicImageSettings() { return { ...imageConcurrency.settings, effectiveConcurrency: imageConcurrency.limit, activeCount: activeImageTaskIds.size }; }
+let imageWorkersRunning = 0;
 function kickImageWorker() {
-  if (imageWorkerRunning) return;
-  imageWorkerRunning = true;
+  while (imageWorkersRunning < imageConcurrency.limit) {
+  imageWorkersRunning++;
   setImmediate(async () => {
+    let processedAny = false;
     try {
       for (;;) {
+        if (imageWorkersRunning > imageConcurrency.limit) break;
         const task = await serializeApi(async () => {
           const index = await readProjectsIndex();
           for (const record of index.projects) {
@@ -825,6 +863,8 @@ function kickImageWorker() {
             for (const shot of project.shots) for (const kind of IMAGE_KINDS) {
               const item = shot.imageGeneration[kind];
               if (item.runner !== 'local' || item.generationStatus !== 'pending') continue;
+              if (IMAGE_KINDS.some(other => shot.imageGeneration[other].generationStatus === 'processing')) continue;
+              if (kind === 'blocking' && ['pending', 'processing', 'failed', 'stale'].includes(shot.imageGeneration.reference.generationStatus)) continue;
               item.generationStatus = 'processing';
               item.generationStartedAt = item.generationHeartbeatAt = new Date().toISOString();
               await saveProject(project);
@@ -835,6 +875,7 @@ function kickImageWorker() {
           return null;
         });
         if (!task) break;
+        processedAny = true;
         const heartbeat = setInterval(() => serializeApi(async () => {
           const found = await findTask(task.taskId);
           if (!found || found.item.generationStatus !== 'processing') return;
@@ -843,13 +884,16 @@ function kickImageWorker() {
         try {
           let prompt = task.visualPrompt;
           if (task.hasDesign) prompt += `\n\n项目视觉规范（调度工作图以空间可读性优先）：\n${await readFile(task.designPath, 'utf8')}`;
-          const result = await generateImageWithCodex({ prompt, aspect: task.aspectRatio, refImages: task.referenceImagePath ? [task.referenceImagePath] : [], outputPath: join(task.outputDir, 'image.png'), retries: 0 });
+          const result = await generateImageWithCodex({ prompt, aspect: task.aspectRatio, refImages: task.referenceImagePaths || (task.referenceImagePath ? [task.referenceImagePath] : []), outputPath: join(task.outputDir, 'image.png'), retries: 0, concurrencyLimit: () => imageConcurrency.limit });
           await serializeApi(async () => {
             const found = await findTask(task.taskId);
             if (!found || found.item.generationStatus !== 'processing') return;
             await finishShotImage(found, result.path); await saveProject(found.project);
           });
+          imageConcurrency.finish();
+          kickImageWorker();
         } catch (error) {
+          imageConcurrency.finish(error);
           await serializeApi(async () => {
             const found = await findTask(task.taskId);
             if (!found || !['pending', 'processing'].includes(found.item.generationStatus)) return;
@@ -859,8 +903,9 @@ function kickImageWorker() {
         } finally { clearInterval(heartbeat); activeImageTaskIds.delete(task.taskId); }
       }
     } catch (error) { console.error('Image worker:', error.message); }
-    finally { imageWorkerRunning = false; }
+    finally { imageWorkersRunning--; if (processedAny) kickImageWorker(); }
   });
+  }
 }
 
 async function attachMedia(project, shot, sourcePath, mediaType) {
@@ -1250,6 +1295,14 @@ async function handleProjectsApi(request, response, url) {
       title: body.title,
       aspectRatio: body.aspectRatio,
       scriptDraft: body.scriptDraft ?? current.scriptDraft,
+      audio: {
+        ...current.audio,
+        instruction: String(body.audio?.instruction ?? current.audio.instruction ?? '').slice(0, 1000),
+        autoApplyTiming: body.audio?.autoApplyTiming ?? current.audio.autoApplyTiming ?? true,
+        referenceText: String(body.audio?.referenceText ?? current.audio.referenceText ?? '').slice(0, 1000),
+        ...(current.audio.reference && body.audio?.reference?.fileName === current.audio.reference.fileName
+          ? { reference: { ...current.audio.reference, text: String(body.audio.reference.text ?? current.audio.reference.text ?? '').slice(0, 1000) } } : {})
+      },
       covers: body.covers || current.covers,
       shots: Array.isArray(body.shots) ? body.shots.map(shot => {
         const runtime = current.shots.find(item => item.id === shot.id);
@@ -1300,19 +1353,93 @@ async function handleShotsApi(request, response, url) {
     if ([...selected].some(id => !project.shots.some(shot => shot.id === id))) return sendError(response, 404, '所选镜头已不存在，请刷新后重试');
     const fields = body.fields;
     if (!fields || typeof fields !== 'object' || Array.isArray(fields) || !Object.keys(fields).length) return sendError(response, 400, '请至少修改一个参数');
-    const choices = { rollType: ['A-ROLL', 'B-ROLL'], mediaType: ['image', 'video'], generator: ['image-gen', 'manual', 'hyperframes', 'remotion'] };
+    const choices = { shotSize: SHOT_SIZES, rollType: ['A-ROLL', 'B-ROLL'], mediaType: ['image', 'video'], generator: ['image-gen', 'manual', 'hyperframes', 'remotion'] };
     for (const [key, value] of Object.entries(fields)) {
       if (key === 'duration') {
         if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return sendError(response, 400, '时长必须是大于等于 0 的秒数');
       } else if (!Object.hasOwn(choices, key) || !choices[key].includes(value)) return sendError(response, 400, `不支持的镜头参数：${key}`);
     }
-    if (fields.generator !== undefined || fields.mediaType !== undefined) {
-      if (project.shots.some(shot => selected.has(shot.id) && ['pending', 'processing'].includes(shot.generationStatus))) return sendError(response, 409, '所选镜头有最终素材任务正在执行，请先取消任务再修改媒体或生成方式');
-    }
-    project.shots = project.shots.map(shot => selected.has(shot.id) ? normalizeShot({ ...shot, ...fields }) : shot);
+    const updatedShotIds = [], skippedShots = [], cancelledTaskIds = [];
+    project.shots = project.shots.map((shot, index) => {
+      if (!selected.has(shot.id)) return shot;
+      const changesGeneration = ['generator', 'mediaType'].some(key => fields[key] !== undefined && fields[key] !== shot[key]);
+      if (changesGeneration && shot.generationStatus === 'processing') {
+        skippedShots.push({ shotId: shot.id, shotIndex: index + 1, reason: '最终素材正在生成，请结束或取消任务后再修改' });
+        return shot;
+      }
+      const next = normalizeShot({ ...shot, ...fields });
+      if (changesGeneration && shot.generationStatus === 'pending') {
+        if (shot.generationTaskId) cancelledTaskIds.push(shot.generationTaskId);
+        next.generationTaskId = ''; next.generationStatus = shot.mediaUrl ? 'ready' : 'idle';
+        next.generationError = ''; next.generationRequestedAt = next.generationStartedAt = next.generationHeartbeatAt = next.generationCompletedAt = null;
+      }
+      updatedShotIds.push(shot.id); return next;
+    });
     await reconcileMediaOrder(project);
     const saved = await saveProject(project);
-    return sendJson(response, 200, { project: saved, updatedShotIds: [...selected] });
+    return sendJson(response, 200, { project: saved, updatedShotIds, skippedShots, cancelledTaskIds });
+  }
+  const fillMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/reference-assets\/(\d+)\/autofill$/);
+  if (fillMatch) {
+    const project = await readProject(decodeURIComponent(fillMatch[1]));
+    const shot = project.shots.find(s => s.id === decodeURIComponent(fillMatch[2]));
+    const asset = shot?.referenceAssets[Number(fillMatch[3])];
+    if (!asset) return sendError(response, 404, 'Reference asset not found');
+    if (request.method === 'POST') {
+      const available = await codexImageAvailable();
+      if (!available.ok) return sendError(response, 503, '本机 Codex 生图不可用，请检查安装与登录');
+      const job = assetFillJobs.start(project, shot, asset);
+      return sendJson(response, 202, publicAssetJob(job));
+    }
+    if (request.method === 'GET') return sendJson(response, 200, publicAssetJob(assetFillJobs.get(project.id, asset.name)));
+    return sendError(response, 405, 'Method not allowed');
+  }
+  const referenceAssetMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/reference-assets(?:\/(\d+))?$/);
+  if (referenceAssetMatch) {
+    const project = await readProject(decodeURIComponent(referenceAssetMatch[1]));
+    const shot = project.shots.find(item => item.id === decodeURIComponent(referenceAssetMatch[2]));
+    if (!shot) return sendError(response, 404, 'Shot not found');
+    const index = referenceAssetMatch[3] === undefined ? null : Number(referenceAssetMatch[3]);
+    const asset = index === null ? null : shot.referenceAssets[index];
+    if (index !== null && !asset) return sendError(response, 404, 'Reference asset not found');
+    if (request.method === 'GET' && asset) {
+      if (!isAbsolute(asset.path)) return sendError(response, 404, 'Reference image missing');
+      const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }[extname(asset.path).toLowerCase()];
+      if (!mime) return sendError(response, 404, 'Reference image missing');
+      try {
+        const content = await readFile(asset.path);
+        response.writeHead(200, { 'content-type': mime, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        return response.end(content);
+      } catch { return sendError(response, 404, 'Reference image missing'); }
+    }
+    if (request.method === 'POST') {
+      const file = parseMultipart(await readBodyBuffer(request, 20 * 1024 * 1024), request.headers['content-type']);
+      const extension = allowedUploads.get(file.mimeType);
+      if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) return sendError(response, 400, '请选择 PNG、JPEG 或 WebP 图片');
+      const fileName = `${createId('asset')}${extension}`;
+      await mkdir(projectMediaDir(project.id), { recursive: true });
+      await writeFile(join(projectMediaDir(project.id), fileName), file.content);
+      const name = asset?.name || basename(file.filename.replaceAll('\\', '/'), extname(file.filename));
+      const next = { name, path: join(projectMediaDir(project.id), fileName),
+        usage: asset?.usage || `作为本镜静态画面的视觉参考，结合提示词采用相关主体外观、服装或场景细节；不复制设定图排版，不将无头设计用于成片。`,
+        scope: asset?.scope || 'reference' };
+      if (index === null) {
+        const blank = shot.referenceAssets.findIndex(item => !item.name && !item.path && !item.usage);
+        if (blank >= 0) shot.referenceAssets[blank] = next;
+        else shot.referenceAssets.push(next);
+      } else shot.referenceAssets[index] = next;
+      shot.referenceMode = 'images';
+      shot.referenceExclusions = shot.referenceExclusions.filter(item => item !== name);
+      shot.referencesReviewed = shot.referenceAssets.every(item => item.path && item.usage);
+      return sendJson(response, 200, await saveProject(project));
+    }
+    if (request.method === 'DELETE' && asset) {
+      shot.referenceExclusions.push(asset.name);
+      shot.referenceAssets.splice(index, 1);
+      shot.referencesReviewed = shot.referenceAssets.length > 0 && shot.referenceAssets.every(item => item.path && item.usage);
+      return sendJson(response, 200, await saveProject(project));
+    }
+    return sendError(response, 405, 'Method not allowed');
   }
   const blockingMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/(blocking|reference)-image$/);
   if (blockingMatch) {
@@ -1518,6 +1645,17 @@ async function handleGenerationApi(request, response, url) {
         const available = await codexImageAvailable();
         if (!available.ok) return sendError(response, 400, available.reason === 'not_logged_in' ? '本机 Codex 尚未登录，请先登录后重试' : '未找到可用的本机 Codex，请先安装或配置路径');
       }
+      // Validate the entire requested batch before spending any generation quota.
+      for (const shot of project.shots.filter(item => !selected || selected.has(item.id))) {
+        if (shot.referenceMode !== 'none' && !shot.referencesReviewed) return sendError(response, 400, `第${project.shots.findIndex(item => item.id === shot.id) + 1}镜：参考图片尚未确认，请在本镜点击“确认引用”；不需要图片时请选择“本镜无需参考图”`);
+        for (const asset of referencesFor(shot, kind)) {
+          if (!asset.name.trim() || !asset.usage.trim() || !isAbsolute(asset.path) || !/\.(png|jpe?g|webp)$/i.test(asset.path)) return sendError(response, 400, `参考资产需填写名称、图片绝对路径和明确用途：${asset.name}`);
+          try { if (!(await stat(asset.path)).isFile()) throw Error(); }
+          catch { return sendError(response, 400, `参考资产图片不存在：${asset.name}`); }
+        }
+      }
+      if (body.revisionNotes !== undefined && (typeof body.revisionNotes !== 'string' || body.revisionNotes.length > 4000)) return sendError(response, 400, '修改意见最多4000字');
+      if (body.revisionNotes?.trim() && (!Array.isArray(body.shotIds) || body.shotIds.length !== 1)) return sendError(response, 400, '修改意见仅适用于单个镜头');
       const queued = [], skipped = [];
       for (const shot of project.shots) {
         if (selected && !selected.has(shot.id)) continue;
@@ -1525,6 +1663,8 @@ async function handleGenerationApi(request, response, url) {
         if (!(kind === 'reference' ? shot.visualPrompt : shot.blockingDescription).trim()) { skipped.push({ shotId: shot.id, reason: 'missing-prompt' }); continue; }
         if (['pending', 'processing'].includes(state.generationStatus)) { skipped.push({ shotId: shot.id, reason: state.generationStatus }); continue; }
         if (!body.force && state.generationStatus === 'ready') { skipped.push({ shotId: shot.id, reason: 'ready' }); continue; }
+        state.revisionNotes = String(body.revisionNotes || '').trim();
+        state.revisionBaseUrl = state.revisionNotes ? shot[imageUrlKey(kind)] || '' : '';
         state.generationTaskId = createTaskId(); state.requestHash = imageSourceHash(project, shot, kind);
         state.generationStatus = 'pending'; state.generationError = ''; state.runner = body.runLocally ? 'local' : 'agent';
         state.generationRequestedAt = new Date().toISOString(); state.generationStartedAt = state.generationHeartbeatAt = state.generationCompletedAt = null;
@@ -1701,12 +1841,20 @@ async function handleApi(request, response, url) {
     }
   }
 
-  const audioMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/audio\/(generate|select|align|apply-durations)$/);
+  const audioMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/audio\/(generate|select|delete|align|apply-durations)$/);
   if (audioMatch && request.method === "POST") {
     const [, projectId, action] = audioMatch;
     const project = await readProject(projectId);
     const body = await readBody(request);
     if (audioJobs.has(projectId)) return sendError(response, 409, "配音任务正在处理");
+    if (action === 'delete') {
+      const index = project.audio.takes.findIndex(take => take.id === body.takeId);
+      if (index < 0) return sendError(response, 404, '配音版本不存在');
+      project.audio.takes.splice(index, 1);
+      if (project.audio.selectedId === body.takeId) project.audio.selectedId = project.audio.takes.at(-1)?.id || '';
+      project.audio.status = project.audio.takes.length ? 'ready' : 'idle'; project.audio.error = '';
+      return sendJson(response, 200, await saveProject(project));
+    }
     if (["align", "apply-durations"].includes(action)) {
       const take = project.audio.takes.find(t => t.id === project.audio.selectedId);
       if (!take) return sendError(response, 400, "请先生成或选择配音");
@@ -1717,26 +1865,33 @@ async function handleApi(request, response, url) {
         take.appliedAt = new Date().toISOString();
         return sendJson(response, 200, await saveProject(project));
       }
+      if (!body.force && take.alignmentMethod === 'forced' && take.timeline?.length && take.dialogueKey === dialogueKey(project.shots)) return sendJson(response, 200, project);
       if (!spokenText(project.shots)) return sendError(response, 409, "当前项目没有带台词的镜头，无法进行对齐");
       if (!voiceTextsMatch(projectVoiceText(project), take.text)) return sendError(response, 409, "当前镜头台词与此配音文本不同，请重新生成配音后对齐");
       audioJobs.add(projectId);
       project.audio.status = "aligning";
       project.audio.error = "";
+      project.audio.alignmentIssue = null;
       const saved = await saveProject(project);
       void alignVoice(join(projectMediaDir(projectId), basename(take.fileName)), project.shots, take.durationMs).then(alignment => serializeApi(async () => {
         const current = await readProject(projectId);
         const version = current.audio.takes.find(t => t.id === take.id);
         if (!version) throw new Error("配音版本已移除");
         version.timeline = alignment.timeline;
-        version.recognition = alignment.recognition;
+        version.recognition = []; version.subtitles = alignment.subtitles; version.alignmentMethod = alignment.alignmentMethod;
         version.dialogueKey = dialogueKey(project.shots);
         version.alignEngine = alignment.engine;
-        current.audio.status = "ready";
+        if (current.audio.autoApplyTiming !== false) {
+          current.shots = applyTiming(current.shots, version, version.timeline);
+          version.appliedAt = new Date().toISOString();
+        }
+        current.audio.status = "ready"; current.audio.error = ""; current.audio.alignmentIssue = null;
         await saveProject(current);
       })).catch(error => serializeApi(async () => {
         try {
           const current = await readProject(projectId);
           current.audio.status = "failed"; current.audio.error = error.message;
+          current.audio.alignmentIssue = error.alignmentIssue || null;
           await saveProject(current);
         } catch (saveError) { console.error(saveError); }
       })).finally(() => audioJobs.delete(projectId));
@@ -1750,15 +1905,17 @@ async function handleApi(request, response, url) {
     const text = projectVoiceText(project);
     if (!text || text.length > 10000) return sendError(response, 400, "请填写台词或脚本，最多 10000 字");
     const id = createId("voice");
-    const instruction = String(body.instruction || "").slice(0, 1000);
+    const instruction = String(body.instruction ?? project.audio.instruction ?? "").slice(0, 1000);
+    project.audio.instruction = instruction;
     const voiceSettings = await loadVoiceSettings(voiceSettingsFile);
     if (voiceSettings.provider !== 'voxcpm' && !voiceSettings.token) return sendError(response, 400, '请先在配音服务设置中填写访问令牌并保存');
     const reference = project.audio.reference;
-    const referenceFileName = basename(String(reference?.fileName || ""));
+    const referenceFileName = voiceSettings.provider !== 'voxcpm' && voiceSettings.voiceId ? '' : basename(String(reference?.fileName || ""));
     const referencePath = referenceFileName ? join(projectMediaDir(projectId), referenceFileName) : null;
     if (referencePath && !(await exists(referencePath))) return sendError(response, 409, "参考音频文件不存在，请重新上传");
-    const referenceText = String(body.referenceText ?? reference?.text ?? "").slice(0, 1000);
+    const referenceText = String(body.referenceText ?? reference?.text ?? project.audio.referenceText ?? "").slice(0, 1000);
     if (reference) reference.text = referenceText;
+    project.audio.referenceText = referenceText;
     project.audio.status = "generating";
     project.audio.error = "";
     project.audio.startedAt = new Date().toISOString();
@@ -1793,7 +1950,8 @@ async function handleApi(request, response, url) {
         promptText: usedPromptText,
         onProgress: (done, total) => setProgress({ done, total })
       });
-    })().then(result => serializeApi(async () => {
+    })().then(async result => {
+      const snapshot = await serializeApi(async () => {
       const current = await readProject(projectId);
       current.audio.takes.push({
         id,
@@ -1802,16 +1960,42 @@ async function handleApi(request, response, url) {
         text,
         instruction,
         referenceFileName,
-        referenceText: usedPromptText,
+        referenceText: result.usedReferenceText ?? usedPromptText,
         provider: voiceSettings.provider,
         modelId: voiceSettings.modelId,
+        generation: voiceSettings.generation || {},
         createdAt: new Date().toISOString()
       });
       current.audio.selectedId = id;
-      current.audio.status = "ready";
+      current.audio.status = current.audio.autoApplyTiming !== false && spokenText(current.shots) && voiceTextsMatch(projectVoiceText(current), text) ? "aligning" : "ready";
       current.audio.progress = null;
-      await saveProject(current);
-    })).catch(error => serializeApi(async () => {
+      return saveProject(current);
+      });
+      if (snapshot.audio.status !== 'aligning') return;
+      try {
+        const alignment = await alignVoice(join(projectMediaDir(projectId), result.fileName), snapshot.shots, result.durationMs);
+        await serializeApi(async () => {
+          const current = await readProject(projectId);
+          const take = current.audio.takes.find(item => item.id === id);
+          if (!take) return;
+          if (dialogueKey(current.shots) !== dialogueKey(snapshot.shots)) throw Error('时间定位期间台词已修改，请重新定位');
+          take.timeline = alignment.timeline; take.recognition = []; take.subtitles = alignment.subtitles; take.alignmentMethod = alignment.alignmentMethod;
+          take.dialogueKey = dialogueKey(snapshot.shots); take.alignEngine = alignment.engine;
+          if (current.audio.autoApplyTiming !== false) {
+            current.shots = applyTiming(current.shots, take, take.timeline);
+            take.appliedAt = new Date().toISOString();
+          }
+          current.audio.status = 'ready'; await saveProject(current);
+        });
+      } catch (error) {
+        await serializeApi(async () => {
+          const current = await readProject(projectId);
+          current.audio.status = 'ready'; current.audio.error = `配音已生成，自动对齐未完成：${error.message}`;
+          current.audio.alignmentIssue = error.alignmentIssue || null;
+          await saveProject(current);
+        });
+      }
+    }).catch(error => serializeApi(async () => {
       try {
         const current = await readProject(projectId);
         current.audio.status = "failed";
@@ -1843,6 +2027,19 @@ async function handleApi(request, response, url) {
 }
 
 const server = createServer(async (request, response) => {
+  if (request.url?.split('?')[0] === '/api/generation/settings') {
+    try {
+      if (request.method === 'GET') return sendJson(response, 200, publicImageSettings());
+      if (request.method === 'POST') return await serializeApi(async () => {
+        const next = validateGenerationSettings(await readBody(request), imageConcurrency.settings);
+        await atomicJson(imageSettingsPath, next);
+        imageConcurrency.configure(next); kickImageWorker();
+        return sendJson(response, 200, publicImageSettings());
+      });
+      return sendError(response, 405, 'Method not allowed');
+    } catch(error) { return sendError(response, 400, error.message); }
+  }
+
   try {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
     if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return sendError(response, 403, "Local host required");
@@ -1874,7 +2071,19 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  kickImageWorker();
+  if (process.env.AGENT_STORYBOARD_SKIP_IMAGE_QUEUE_ON_START !== '1') kickImageWorker();
   console.log(`Agent 分镜台已启动：http://127.0.0.1:${port}`);
   console.log(`数据目录：${dataDir}`);
+});
+
+
+function publicAssetJob(job) {
+  return job ? { status: job.status, name: job.name, count: job.count, error: job.error } : { status: 'idle', error: '任务不存在或服务已重启，请重新补齐' };
+}
+const assetFillJobs = createAssetJobs({
+  generate: generateImageWithCodex,
+  load: async id => { const p = await readProject(id); p.save = async () => { delete p.save; return saveProject(p); }; return p; },
+  commit: serializeApi,
+  outputPath: (p, name, stamp) => join(projectMediaDir(p.id), `asset-generated-${stamp}-${createId('ref')}.png`),
+  design: async p => p.hasDesign ? await readFile(projectDesignFile(p.id), 'utf8') : '沿用本项目已确定的视觉风格'
 });

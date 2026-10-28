@@ -301,12 +301,16 @@ function shotSchema({ requireId = false } = {}) {
     type: "object",
     properties: {
       ...(requireId ? { shotId: { type: "string" } } : {}),
+      shotSize: { type: "string", enum: ["", "大远景", "远景", "大全景", "全景", "中全景", "中景", "中近景", "近景", "特写", "大特写"], description: "景别，与 A/B-roll 叙事用途独立；生成与分镜表显示采用此字段。" },
       rollType: { type: "string", enum: ["A-ROLL", "B-ROLL"] },
       mediaType: { type: "string", enum: ["image", "video"] },
       duration: { type: "number", minimum: 0 },
       dialogue: { type: "string" },
       visualPrompt: { type: "string" },
       actionDescription: { type: 'string', description: 'Starting state, subject actions and gaze, rhythm and ending state within this shot.' },
+      referenceAssets: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, usage: { type: 'string' }, scope: { type: 'string', enum: ['both', 'reference', 'blocking'] } }, required: ['name', 'path', 'usage'] }, description: 'Explicit image attachments with identity/age/clothing/space constraints; absolute local image paths.' },
+      referenceMode: { type: 'string', enum: ['images', 'none'], description: 'Explicitly choose none for a shot that needs no reference images; images uses attached assets.' },
+      referencesReviewed: { type: 'boolean', description: 'True only after reviewing all required character, scene and prop references; empty list means intentionally no references.' },
       blockingDescription: { type: 'string', description: 'Camera position, subject positions, eyelines, movement paths and axis constraints; separate from final visual appearance.' },
       generator: {
         type: "string",
@@ -961,7 +965,7 @@ async function callTool(id, params) {
       const image = await generateImageWithCodex({
         prompt,
         aspect: task.aspectRatio,
-        refImages: task.referenceImagePath ? [task.referenceImagePath] : [],
+        refImages: task.referenceImagePaths || (task.referenceImagePath ? [task.referenceImagePath] : []),
         outputPath: join(task.outputDir, "image.png")
       });
       const result = await requestJson(

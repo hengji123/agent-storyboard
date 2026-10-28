@@ -3,6 +3,23 @@ import { randomBytes } from 'node:crypto';
 import { generateVoxcpm, voxcpmBase } from './voxcpm.mjs';
 
 export const defaultVoiceSettings = { provider: 'voxcpm', baseUrl: 'https://voxcpm.modelbest.cn', token: '', modelId: '', voiceId: '', speaker: '' };
+export function normalizeGeneration(value = {}) {
+  const output = {};
+  for (const [key, min, max, integer] of [['guidanceScale', 0.5, 5], ['inferenceSteps', 1, 50, true], ['seed', 0, 2147483647, true], ['speed', 0.5, 2], ['emotionStrength', 0, 1]]) {
+    if (value[key] === undefined || value[key] === '' || value[key] === null) continue;
+    const n = Number(value[key]);
+    if (!Number.isFinite(n) || n < min || n > max || (integer && !Number.isInteger(n))) throw Error(`配音参数 ${key} 超出范围 ${min}–${max}`);
+    output[key] = n;
+  }
+  if (value.voxMode) { if (!['design', 'clone', 'continuation'].includes(value.voxMode)) throw Error('无效的克隆模式'); output.voxMode = value.voxMode; }
+  if (value.voiceMode) { if (!['design', 'clone'].includes(value.voiceMode)) throw Error('无效的声音模式'); output.voiceMode = value.voiceMode; }
+  if (value.emotionText) output.emotionText = String(value.emotionText).slice(0, 500);
+  if (value.modelOptions && typeof value.modelOptions === 'object' && !Array.isArray(value.modelOptions)) {
+    if (JSON.stringify(value.modelOptions).length > 16000) throw Error('模型参数过长');
+    output.modelOptions = structuredClone(value.modelOptions);
+  }
+  return output;
+}
 export function normalizeVoiceSettings(input, previous = defaultVoiceSettings) {
   const provider = input.provider ?? previous.provider;
   if (!['yovoice-local', 'yovoice-api', 'voxcpm'].includes(provider)) throw Error('不支持的配音服务');
@@ -15,7 +32,7 @@ export function normalizeVoiceSettings(input, previous = defaultVoiceSettings) {
   const same = provider === previous.provider && baseUrl === previous.baseUrl;
   const token = input.clearToken ? '' : String(input.token || (same ? previous.token : '') || '').trim();
   if (/[\r\n]/.test(token)) throw Error('令牌格式无效');
-  return { provider, baseUrl, token, modelId: String(input.modelId ?? previous.modelId).trim(), voiceId: String(input.voiceId ?? previous.voiceId).trim(), speaker: String(input.speaker ?? previous.speaker).trim() };
+  return { provider, baseUrl, token, modelId: String(input.modelId ?? previous.modelId).trim(), voiceId: String(input.voiceId ?? previous.voiceId).trim(), speaker: String(input.speaker ?? previous.speaker).trim(), generation: normalizeGeneration(input.generation ?? previous.generation) };
 }
 export function publicVoiceSettings(settings) {
   const { token, ...publicSettings } = settings;
@@ -56,8 +73,15 @@ export async function inspectVoiceProvider(settings) {
 }
 export async function prepareVoiceProvider(settings, { promptWav, promptText }) {
   if (settings.provider === 'voxcpm') return settings;
+  if (settings.generation?.voxMode === 'design' || settings.generation?.voiceMode === 'design') return { ...settings, voiceId: '' };
   if (!settings.token) throw Error('请先填写 Yovoice 访问令牌');
-  if (settings.voiceId || !promptWav) return settings;
+  if (settings.voiceId) {
+    const result = await (await call(settings, '/voices')).json();
+    const voices = Array.isArray(result) ? result : Array.isArray(result.voices) ? result.voices : result.id ? [result] : [];
+    const voice = voices.find(item => item.id === settings.voiceId);
+    return { ...settings, referenceText: voice?.referenceText || '', libraryVoice: true };
+  }
+  if (!promptWav) return settings;
   const response = await call(settings, '/voices?name=storyboard-reference', {
     method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: await readFile(promptWav), signal: AbortSignal.timeout(90000)
   });
@@ -81,13 +105,21 @@ export function wavDurationMs(audio) {
 }
 export async function synthesizeVoice(settings, { text, output, instruction, promptWav, promptText, pollMs = 2000, timeoutMs = 30 * 60 * 1000 }) {
   if (settings.provider === 'voxcpm') return generateVoxcpm({ text, output, instruction, promptWav, promptText, apiBase: settings.baseUrl });
+  if (settings.libraryVoice) promptText = settings.referenceText;
   const requestId = randomBytes(16).toString('hex');
-  const body = { text };
+  const body = { ...normalizeGeneration(settings.generation), text };
   if (settings.modelId) body.modelId = settings.modelId;
   if (settings.voiceId) body.voiceId = settings.voiceId;
   if (settings.speaker) body.speaker = settings.speaker;
   if (instruction) body.voiceDescription = instruction;
   if (promptText) body.referenceText = promptText;
+  if (settings.modelId.startsWith('voxcpm2')) {
+    body.voxMode ||= settings.voiceId ? (promptText ? 'continuation' : 'clone') : 'design';
+    if (body.voxMode !== 'design' && !settings.voiceId) throw Error('音色克隆需要选择已有音色或上传参考音频');
+    if (body.voxMode === 'continuation' && !promptText?.trim()) throw Error('精细克隆需要填写参考音频的准确原文');
+    if (body.voxMode === 'design') { delete body.voiceId; delete body.referenceText; }
+    delete body.voiceMode;
+  } else { delete body.voxMode; }
   const signal = AbortSignal.timeout(timeoutMs);
   let job;
   try {

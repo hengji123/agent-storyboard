@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { matchRecognition } from "../recognition.mjs";
+import { matchRecognition, whisperSegments } from "../recognition.mjs";
+test('Chinese byte tokens must not corrupt matching or displayed recognition', () => {
+  const segments = whisperSegments([{ text: '科研项目获奖时谦让有加', offsets: { from: 0, to: 2000 }, tokens: [
+    { text: '科�', offsets: { from: 0, to: 500 } }, { text: '�项目', offsets: { from: 500, to: 1000 } }
+  ] }]);
+  assert.equal(segments[0].text, '科研项目获奖时谦让有加');
+  assert.equal(matchRecognition([{ id: 'a', dialogue: '科研项目获奖时谦让有加' }], segments, 2000)[0].confidence, 1);
+});
 test("recognition alignment follows spoken timing, not character proportions", () => {
   const shots = [{ id: "a", dialogue: "你好，世界。" }, { id: "b", dialogue: "再见。" }];
   const result = matchRecognition(shots, [{ text: "你好世界", start: 500, end: 1800 }, { text: "再见", start: 4000, end: 5000 }], 5500);

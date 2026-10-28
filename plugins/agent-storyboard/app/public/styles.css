@@ -1817,10 +1817,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   inset: 0;
   z-index: var(--z-lightbox);
   display: grid;
-  grid-template-rows: 72px minmax(0, 1fr) 92px 122px;
+  grid-template-rows: 72px minmax(0, 1fr) 48px 92px 122px;
   background: #090a0f;
   color: #f5f5f7;
 }
+.presenter-screen { position: relative; min-height: 0; overflow: hidden; }
+.presenter-screen .presenter-stage { height: 100%; box-sizing: border-box; }
+.presenter-subtitle { position: absolute; bottom: 24px; left: 12%; right: 12%; text-align: center; font-size: clamp(16px, 2vw, 27px); line-height: 1.5; color: white; text-shadow: 0 2px 5px #000, 1px 0 3px #000; background: #0008; border-radius: 5px; padding: 5px 12px; pointer-events: none; }
+.presenter-playback { display: flex; align-items: center; gap: 12px; padding: 4px 28px; background: #16171e; font-size: 12px; }
+.presenter-playback input { flex: 1; min-width: 50px; accent-color: #ffd766; }
+.presenter-playback button { padding: 7px 18px; border-radius: 6px; background: #ffd766; color: #151515; }
+.presenter-playback small { color: #aaa; }
+@media(max-width: 650px) { .presenter-playback small { display: none; } .presenter-subtitle { left: 7%; right: 7%; bottom: 12px; } }
 .presenter-top {
   display: flex;
   align-items: center;
@@ -1889,7 +1897,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   background-size: 24px 24px;
 }
 .presenter-nav {
-  position: fixed;
+  position: absolute;
+  z-index: 3;
   top: 50%;
   width: 50px;
   height: 50px;
@@ -3489,6 +3498,12 @@ th { height: 40px; font-size: 12px; letter-spacing: 0; }
 .environment-row[data-status="info"] .environment-state { color: var(--muted); }
 .voice-service-settings { border: 1px solid var(--border, #d8dce3); border-radius: 10px; padding: 14px; margin-bottom: 16px; min-width: 0; }
 .voice-service-settings .voice-field { margin: 10px 0; }
+.voice-service-settings .voice-field > small { grid-column: 2; }
+.voice-auto-apply { display: flex; align-items: center; gap: 8px; margin: 10px 0 16px; font-size: 12px; line-height: 1.6; }
+.voice-auto-apply input { width: 15px; height: 15px; margin: 0; flex: 0 0 15px; }
+#voice-advanced-settings > summary, #voice-advanced-settings details > summary { cursor: pointer; margin: 10px 0; font-size: 12px; }
+#voice-model-advanced input[type="checkbox"] { width: 16px; min-height: 16px; justify-self: start; }
+@media (max-width: 600px) { .voice-service-settings .voice-field > small { grid-column: 1; } }
 .voice-service-settings input, .voice-service-settings select { width: 100%; box-sizing: border-box; min-height: 36px; padding: 7px 9px; border: 1px solid var(--control-border); border-radius: 6px; color: var(--ink); background: var(--paper); }
 .voice-service-settings [hidden] { display: none !important; }
 .voice-service-settings small, #voice-service-status { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -3560,6 +3575,22 @@ th { height: 40px; font-size: 12px; letter-spacing: 0; }
 .table-shell[data-density='compact'] .reference-preview img { max-height: 64px; }
 .header-bulk-edit { display: inline-block; padding: 3px 5px; margin-left: 3px; font-size: 10px; border-radius: 5px; color: var(--accent); background: var(--surface-subtle); white-space: nowrap; }
 .bulk-shot-dialog { width: min(620px, calc(100vw - 32px)); max-height: 88vh; overflow-y: auto; }
+.shot-reference-assets { margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.6; }
+.shot-reference-assets > p { margin: 5px 0; color: var(--muted); font-size: 11px; }
+.reference-asset-status { display: block; color: #278142; }
+.reference-asset-status.reference-warning { color: #a75a00; font-weight: 600; }
+.reference-asset-editor > summary { cursor: pointer; color: var(--accent); }
+.reference-asset-list { max-height: 330px; overflow-y: auto; }
+.shot-reference-assets .reference-asset-list { display: flex; flex-wrap: wrap; gap: 8px; max-height: 210px; margin: 8px 0; }
+.reference-asset-thumb { position: relative; width: 86px; height: 72px; padding: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--paper); }
+.reference-asset-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.reference-asset-thumb .reference-asset-remove { position: absolute; top: 1px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; color: #a52a2a; line-height: 18px; font-size: 16px; }
+.reference-asset-thumb:hover { border-color: #b94a48; }
+.reference-asset-thumb.missing { width: 125px; color: #a75a00; font-size: 11px; white-space: pre-line; padding: 5px; }
+.reference-asset-list fieldset { min-width: 0; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.reference-asset-list input { width: 100%; box-sizing: border-box; }
+.reference-asset-editor > label { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; }
+.reference-asset-editor > label input { width: 14px; height: 14px; flex: 0 0 14px; margin-top: 3px; }
 .bulk-shot-dialog h2 { font-size: 20px; margin: 0; }
 .bulk-shot-dialog select { min-width: 0; width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--paper); color: var(--ink); border: 1px solid var(--control-border); }
 .bulk-shot-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
@@ -3569,3 +3600,13 @@ th { height: 40px; font-size: 12px; letter-spacing: 0; }
 #bulk-shot-list input { width: 16px; height: 16px; margin-top: 2px; flex: 0 0 16px; accent-color: var(--accent); }
 .bulk-shot-dialog small, #bulk-shot-summary { font-size: 12px; line-height: 1.7; color: var(--muted); }
 @media (max-width: 600px) { .bulk-shot-fields { grid-template-columns: 1fr; } .board-tools { flex-wrap: wrap; } }
+
+.reference-missing-choice { flex: 1 1 250px; padding: 10px; border: 1px solid #d8b77d; border-radius: 6px; background: #fffaf0; }
+.reference-missing-choice p { margin: 5px 0 8px; color: #64573f; font-size: 12px; }
+.reference-choice-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.reference-choice-actions button, .reference-choice-actions select { font-size: 12px; min-height: 30px; max-width: 100%; }
+
+.reference-asset-preview { display: block; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.reference-asset-thumb .reference-asset-remove { z-index: 1; padding: 0; border: 1px solid var(--line); cursor: pointer; }
+.reference-asset-thumb:hover { border-color: var(--line); }
+.reference-asset-preview:focus-visible, .reference-asset-remove:focus-visible { outline: 2px solid #1677ff; outline-offset: -2px; }

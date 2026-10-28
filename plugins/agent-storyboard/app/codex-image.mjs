@@ -6,8 +6,11 @@ import { mkdir, readFile, rm, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { readCodexBinding, codexProcessEnv } from './codex-binding.mjs';
 export function resolveCodexCommand() {
   if (process.env.AGENT_STORYBOARD_CODEX) return process.env.AGENT_STORYBOARD_CODEX;
+  const binding = readCodexBinding();
+  if (binding) return binding.command;
   if (process.env.CODEX_CLI_PATH && existsSync(process.env.CODEX_CLI_PATH)) return process.env.CODEX_CLI_PATH;
   if (process.platform === 'win32' && process.env.APPDATA) {
     const target = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
@@ -39,18 +42,21 @@ function assertSafePath(label, value) {
   if (SHELL_METACHAR.test(value)) throw new ImageGenError("invalid_args", `${label} 含有不安全的字符：${value}`, false);
 }
 
-async function acquireLock(timeoutMs = 30 * 60 * 1000) {
+async function acquireLock(limit, timeoutMs = 30 * 60 * 1000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    try {
-      const fd = openSync(lockPath, "wx");
-      return async () => { closeSync(fd); await unlink(lockPath).catch(() => {}); };
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const info = await stat(lockPath).catch(() => null);
-      if (!info || Date.now() - info.mtimeMs > 30 * 60 * 1000) await unlink(lockPath).catch(() => {});
-      else await delay(500);
+    for (let index = 0; index < Math.max(1, Math.min(8, Number(typeof limit === 'function' ? limit() : limit) || 2)); index++) {
+      const slot = index === 0 ? lockPath : `${lockPath}.slot${index + 1}`;
+      try {
+        const fd = openSync(slot, "wx");
+        return async () => { closeSync(fd); await unlink(slot).catch(() => {}); };
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        const info = await stat(slot).catch(() => null);
+        if (info && Date.now() - info.mtimeMs > 30 * 60 * 1000) await unlink(slot).catch(() => {});
+      }
     }
+    await delay(100);
   }
   throw new ImageGenError("busy", "等待其他生图任务超时", true);
 }
@@ -133,7 +139,7 @@ function runCodex({ instruction, refImages, outputPath, timeoutMs, graceMs, poll
     const startedAt = Date.now();
     const child = spawn(command, args, {
       windowsHide: true,
-      env: { ...process.env, ...macSystemProxyEnv() },
+      env: { ...codexProcessEnv(), ...macSystemProxyEnv() },
       stdio: ["pipe", "pipe", "pipe"],
       // 独立进程组：Codex 会派生孙进程，收尾时整棵杀，避免它们占住管道。
       detached: process.platform !== "win32"
@@ -216,6 +222,7 @@ export async function generateImageWithCodex({
   refImages = [],
   timeoutMs = 8 * 60 * 1000,
   retries = 1,
+  concurrencyLimit = 2,
   graceMs = 10_000,
   pollMs = 2000,
   command = resolveCodexCommand(),
@@ -230,7 +237,7 @@ export async function generateImageWithCodex({
   refs.forEach((image) => assertSafePath("参考图路径", image));
   await mkdir(dirname(output), { recursive: true });
 
-  const release = await acquireLock();
+  const release = await acquireLock(concurrencyLimit);
   try {
     let lastError;
     let switchedModel = false;
@@ -259,8 +266,8 @@ export async function generateImageWithCodex({
 
 export async function codexImageAvailable() {
   const command = resolveCodexCommand(), args = configuredCommandArgs();
-  const version = spawnSync(command, [...args, "--version"], { encoding: "utf8", windowsHide: true });
+  const version = spawnSync(command, [...args, "--version"], { encoding: "utf8", windowsHide: true, env: codexProcessEnv() });
   if (version.error || version.status !== 0) return { ok: false, reason: "not_installed" };
-  const login = spawnSync(command, [...args, "login", "status"], { encoding: "utf8", windowsHide: true });
+  const login = spawnSync(command, [...args, "login", "status"], { encoding: "utf8", windowsHide: true, env: codexProcessEnv() });
   return login.status === 0 ? { ok: true } : { ok: false, reason: "not_logged_in" };
 }

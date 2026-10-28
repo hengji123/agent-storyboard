@@ -28,6 +28,9 @@ test('voice settings hide credentials and do not carry them to another endpoint'
   assert.throws(() => normalizeVoiceSettings({ provider: 'yovoice-api', baseUrl: 'http://example.com' }));
   assert.throws(() => normalizeVoiceSettings({ baseUrl: 'https://user:password@example.com' }));
   assert.throws(() => wavDurationMs(Buffer.from('not audio')));
+  const advanced = normalizeVoiceSettings({ generation: { voxMode: 'continuation', guidanceScale: 1.8, inferenceSteps: 12, seed: 123, modelOptions: { voxcpm2: { text_chunk_size: 160 } } } }, saved);
+  assert.deepEqual(normalizeVoiceSettings({}, advanced).generation, advanced.generation);
+  assert.throws(() => normalizeVoiceSettings({ generation: { guidanceScale: 99 } }, saved));
   assert.equal(wavDurationMs(sampleWav()), 1000);
 });
 
@@ -44,7 +47,7 @@ test('Yovoice uses authenticated jobs, reference upload and WAV download without
     response.setHeader('content-type', 'application/json');
     if (request.url === '/v1/status') return response.end(JSON.stringify({ ready: true }));
     if (request.url === '/v1/models') return response.end(JSON.stringify({ installed: [{ id: 'test-model' }] }));
-    if (request.url === '/v1/voices') return response.end(JSON.stringify([{ id: 'saved-voice', name: 'Narrator' }]));
+    if (request.url === '/v1/voices') return response.end(JSON.stringify([{ id: 'saved-voice', name: 'Narrator', referenceText: '音色库原文' }]));
     if (request.url.startsWith('/v1/voices?')) return response.end(JSON.stringify({ id: 'uploaded-voice' }));
     if (request.url.startsWith('/v1/jobs/')) {
       if (busy) { response.writeHead(409); return response.end('busy'); }
@@ -78,9 +81,16 @@ test('Yovoice uses authenticated jobs, reference upload and WAV download without
     assert.match(submitted.url, /^\/v1\/jobs\/[a-f0-9]{32}$/);
     assert.deepEqual(JSON.parse(submitted.raw), { text: '测试旁白', modelId: 'test-model', voiceId: 'uploaded-voice', voiceDescription: '沉稳', referenceText: '原文' });
     assert.equal(requests.filter(request => request.url.startsWith('/v1/voices?')).length, 1);
+    const precise = { ...prepared, modelId: 'voxcpm2-orig', generation: { voxMode: 'continuation', guidanceScale: 1.8, inferenceSteps: 12, seed: 123, modelOptions: { voxcpm2: { text_chunk_size: 160 } } } };
+    await synthesizeVoice(precise, { text: '精细克隆', promptText: '准确原文', output, pollMs: 1 });
+    const detailed = JSON.parse(requests.filter(request => request.method === 'PUT').at(-1).raw);
+    assert.equal(detailed.voxMode, 'continuation'); assert.equal(detailed.guidanceScale, 1.8);
+    assert.equal(detailed.modelOptions.voxcpm2.text_chunk_size, 160);
+    await assert.rejects(synthesizeVoice(precise, { text: '缺原文', output, pollMs: 1 }), /准确原文/);
     assert.ok(requests.filter(request => request.url === '/v1/audio/audio-result').every(request => request.authorization === 'Bearer private-test-token'));
     // This path must work even when FFmpeg is unavailable.
     const generated = await generateVoice({ directory, id: 'native', text: '旁白', voiceSettings: { ...settings, voiceId: 'saved-voice' } });
+    assert.equal(JSON.parse(requests.filter(request => request.method === 'PUT').at(-1).raw).referenceText, '音色库原文');
     assert.equal(generated.durationMs, 1000);
     assert.equal(generated.fileName, 'native.wav');
     assert.equal(generated.chunkCount, 1);

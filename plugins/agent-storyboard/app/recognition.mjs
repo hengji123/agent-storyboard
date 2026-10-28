@@ -1,4 +1,13 @@
 const chars = text => [...String(text).normalize("NFKC").toLowerCase()].filter(c => /[\p{L}\p{N}]/u.test(c));
+export function whisperSegments(transcription = []) {
+  return transcription.flatMap(segment => {
+    const tokens = (segment.tokens || []).filter(token => !token.text?.startsWith('[_') && token.offsets?.to > token.offsets?.from);
+    // Whisper byte tokens can contain incomplete UTF-8 characters. The full segment
+    // text is decoded by Whisper before export and is safe to use in that case.
+    const parts = tokens.length && tokens.every(token => !String(token.text).includes('\uFFFD')) ? tokens : [segment];
+    return parts.map(part => ({ text: part.text, start: part.offsets?.from, end: part.offsets?.to }));
+  }).filter(segment => Number.isFinite(segment.start) && segment.end > segment.start);
+}
 
 // Sequence alignment keeps repeated dialogue in order; punctuation is ignored.
 export function matchRecognition(shots, segments, durationMs) {
@@ -34,7 +43,12 @@ export function matchRecognition(shots, segments, durationMs) {
   const timeline = spoken.map((shot, index) => {
     const match = matches[index];
     const confidence = match.length / chars(shot.dialogue).length;
-    if (!match.length || confidence < 0.5) throw new Error(`镜头 ${shots.indexOf(shot) + 1} 识别匹配不足，请检查台词与配音是否一致`);
+    if (!match.length || confidence < 0.5) {
+      const issue = { shotId: shot.id, shotIndex: shots.indexOf(shot) + 1, expectedText: shot.dialogue, confidence: Math.round(confidence * 100), heardText: segments.map(segment => segment.text).join('') };
+      const error = new Error(`第 ${issue.shotIndex} 镜台词匹配率 ${issue.confidence}%，低于 50%，未修改镜头时长。请试听配音并核对该镜台词；若漏读或错读，请重新生成配音。`);
+      error.alignmentIssue = issue;
+      throw error;
+    }
     return { shotId: shot.id, text: shot.dialogue, start: Math.round(Math.min(...match.map(t => t.start))), end: Math.round(Math.max(...match.map(t => t.end))), confidence: Math.round(confidence * 100) / 100 };
   });
   timeline.forEach((row, index) => {
