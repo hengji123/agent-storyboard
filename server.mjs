@@ -2013,7 +2013,7 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, {
       ok: true,
       app: "agent-storyboard",
-      version: "0.8.0",
+      version: "0.9.0",
       dataDir,
       publicDir
     });

@@ -1,337 +1,223 @@
-<div align="center">
+# Agent 分镜台 · AI 导演工作台
 
-<img src="docs/assets/agent-storyboard-cover.png" alt="Agent 分镜台" width="100%">
+把剧本、导演分镜、参考资产、静态图、镜头调度、配音和连续预览放在同一个本地工作台。通过 MCP 连接 Codex / Claude Code，由 Agent 写入分镜和处理任务，在网页中编辑、检查并验收结果。
 
-<h1>Agent 分镜台 · Agent Storyboard</h1>
+当前版本：**0.9.0**。本仓库由 [Yuuhann1999/agent-storyboard](https://github.com/Yuuhann1999/agent-storyboard) 的 0.8.0 源码发展而来，由 [hengji123](https://github.com/hengji123) 持续维护。当前版本围绕导演设计、图片参考约束和声画时序进行了扩展；安装、反馈与更新请使用本仓库。
 
-<p><b>让 Codex、Claude Code 帮你把视频从想法做到分镜、素材和配音。</b><br>
-一个本地优先的分镜工作台：Agent 负责写和生成，你在一张表里检查、调整、验收。</p>
+[快速开始](#快速开始) · [当前能力](#当前能力) · [相对原版的主要变化](#相对原版的主要变化) · [环境与依赖](#环境与依赖) · [文档](#文档) · [开发](#开发)
 
-<p>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e.svg" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/Codex-Plugin-111827" alt="Codex Plugin">
-  <img src="https://img.shields.io/badge/Claude%20Code-Plugin-d97757" alt="Claude Code Plugin">
-  <img src="https://img.shields.io/badge/MCP-Ready-0ea5e9" alt="MCP Ready">
-  <img src="https://img.shields.io/badge/Node.js-18%2B-339933" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/Local--first-Yes-2563eb" alt="Local first">
-</p>
+## 当前能力
 
-<p>
-  <a href="#-快速开始">快速开始</a> ·
-  <a href="#-它是怎么工作的">工作方式</a> ·
-  <a href="#-功能一览">功能</a> ·
-  <a href="#-环境与依赖">环境</a> ·
-  <a href="#-mcp-工具">MCP 工具</a> ·
-  <a href="#-开发">开发</a>
-</p>
+### 导演分镜
 
-</div>
+- 每镜分别记录景别、镜头类型、媒体、时长、台词、静态画面、主体动作、镜头调度和制作备注。
+- 静态画面描述、动作设计、机位与人物路线分开编辑；导演详情支持展开查看。
+- 静态参考图、镜头调度图和最终图片 / 视频素材分别管理，避免相互覆盖。
+- 支持批量修改镜头参数、重排、复制、插入、撤销删除与搜索；窄窗口切换为卡片布局。
 
----
+### 参考资产与图片生成
 
-## 为什么做它
+- 逐镜附上人物、场景、道具或风格图片，并明确各图的用途和适用范围。
+- 从提示词中的明确资产名称或编号同步引用；同项目有唯一匹配时复用，缺图或版本歧义时提示补齐。
+- 生图前核对参考清单；无需参考图的镜头可以明确选择不使用图片参考。
+- 静态参考图与调度图支持单镜、批量生成和上传替换，分别保留版本记录。
+- 修改提示词、景别、动作、参考资产或视觉规范后，相关图片会标记待更新；过期任务不能覆盖新内容。
+- 网页图片任务可由本机 Codex CLI 执行并自动回填；最高并发可设为 1–8，支持自动调节。
 
-做一条短视频，脚本在文档里，分镜在表格里，图片在生图网页里，配音在另一个工具里，素材散落在文件夹里。每换一个窗口，上下文就丢一次。
+图片生成使用所连接账号的服务和额度。编辑文字不会自动重新生成图片。
 
-Agent 分镜台把这些收进同一张**本地分镜表**：
+### 配音与台词时间定位
 
-- **Agent 直接写入**：一句话让 Agent 建好完整项目，不需要控制浏览器。
-- **结果自动回填**：Agent 生成的图片、视频和配音，落进对应镜头，不用手动对文件名。
-- **你只做验收**：所有自动化结果都在表格里，能一眼看到、直接改。
-- **数据都在本机**：项目、脚本和素材保存在你的电脑上。
+- 选择本地 Yovoice、兼容协议的远程 Yovoice API，或 VoxCPM 在线服务。
+- 根据服务和模型能力使用声音描述、音色 ID、参考音频和参考原文；模型选项按服务返回的能力展示。
+- 配音支持多个版本，生成新版本沿用已保存设置。
+- 用本地 Qwen3 Forced Aligner 对已知台词定位时间，按需自动应用有台词镜头的时长；无台词镜头保留原时长。
+- 时间定位失败时保留已生成音频和镜头时长。字幕沿用原台词，对齐过程不改写文案。
+- Whisper 仅用于独立的参考录音原文识别，不再承担镜头台词时间定位。
 
-<div align="center">
-  <img src="docs/assets/demo-fill.gif" alt="素材生成后自动回填到分镜表" width="86%">
-  <br><sub>Agent 生成素材，结果自动回填到对应镜头</sub>
-</div>
+### 连续预览与交付
 
-## 🚀 快速开始
+- 连续预览按镜头时长切换画面；有选中配音时以音频时钟播放，并显示已对齐台词。
+- 节奏提示结合景别、动作、台词负荷和实际配音时间，供创作者复核。
+- 支持素材总览、横竖版封面、视觉风格与项目 `DESIGN.md`。
+- 导出 Markdown、HTML、Word 和纯文本；导演动作与调度说明随分镜导出，Word 可嵌入调度图。
 
-需要 Node.js 18 或更高版本，以及 Codex 或 Claude Code 之一。
+连续预览用于检查分镜与声画关系，当前不提供一键导出完整剪辑成片。HyperFrames / Remotion 动效由 Agent 调用相应工具链完成。
 
-**1. 安装插件**
+## 快速开始
 
-<table>
-<tr>
-<td width="50%" valign="top">
+建议使用 **Node.js 22 或更高版本**。基础网页和本地服务没有运行时 npm 第三方依赖；图片、配音和对齐按需配置。
 
-**Codex**
+### 从源码启动
 
 ```bash
-codex plugin marketplace add Yuuhann1999/agent-storyboard
-codex plugin add agent-storyboard@agent-storyboard
-```
-
-</td>
-<td width="50%" valign="top">
-
-**Claude Code**
-
-```bash
-claude plugin marketplace add Yuuhann1999/agent-storyboard
-claude plugin install agent-storyboard@agent-storyboard
-```
-
-</td>
-</tr>
-</table>
-
-安装后新开一个对话，让 MCP 工具重新加载（Claude Code 里可以用 `/mcp` 确认 `agent-storyboard` 已连接）。
-
-**2. 打开分镜台**
-
-```text
-打开 Agent 分镜台。
-```
-
-插件会自动启动内置的本地工作台，并给出链接（默认 `http://127.0.0.1:43218`），在侧边栏或浏览器里打开即可。
-
-**3. 创建第一个项目**
-
-```text
-创建一个 9:16 的短视频分镜项目，主题是“独居第三年，我把 20㎡ 出租屋改成了工作室”，
-风格干净、节奏快，适合抖音。写好台词和画面描述。
-```
-
-**4. 生成素材**
-
-在分镜台里点镜头的「生成素材」，或点顶栏的「批量生成」，然后对 Agent 说：
-
-```text
-处理 Agent 分镜台里所有待生成素材。
-```
-
-## 🧭 它是怎么工作的
-
-```mermaid
-flowchart LR
-  A["你：视频主题和要求"] --> B["Agent 通过 MCP<br/>写入完整分镜项目"]
-  B --> C["你在分镜表里<br/>检查、调整"]
-  C --> D["加入生成队列<br/>单镜头 / 批量"]
-  D --> E["Agent 生成<br/>图片 · 动效视频 · 配音"]
-  E --> F["素材自动回填<br/>到对应镜头"]
-  F --> C
-```
-
-分镜台是一个本地网页服务，Agent 通过 MCP 工具和它对话。三种生成方式按镜头选择：
-
-| 生成方式 | 做什么 | 由谁完成 |
-| --- | --- | --- |
-| **AI 生图** | 按画面描述生成图片 | Codex 用自带的 image_gen；Claude Code 通过 `generate_storyboard_image` 调用本机 Codex 出图 |
-| **HyperFrames / Remotion 动效** | 用代码渲染字幕、信息图、转场等视频 | Agent 在本地渲染（需要对应插件和渲染工具链） |
-| **手动素材** | 自己拍的、自己剪的 | 你上传图片或视频 |
-
-## ✨ 功能一览
-
-### 一张表看完整个分镜
-
-镜头类型、媒体、时长、台词、画面描述、生成方式、素材预览和备注都在同一行。长项目切到「紧凑」，一屏看更多镜头；节奏有问题的镜头会直接标出提示。
-
-<table>
-<tr>
-<td width="50%"><img src="docs/assets/table.png" alt="分镜表：详细视图"><br><sub>详细视图</sub></td>
-<td width="50%"><img src="docs/assets/table-compact.png" alt="分镜表：紧凑视图"><br><sub>紧凑视图，一屏 7 个镜头</sub></td>
-</tr>
-</table>
-
-- 拖拽或 `Alt + ↑/↓` 调整顺序，复制镜头、在下方插入，误删可以撤销。
-- 素材文件名带镜头序号，调整顺序后会自动同步，不会互相覆盖。
-- 按台词、画面、备注搜索；顶栏实时显示「生成中 / 排队 / 失败」数量，点一下定位。
-
-### 口播配音，和台词对齐
-
-在脚本页生成配音，可以描述声音风格，也可以上传参考音频克隆音色。生成后用本地 Whisper 识别，把配音对齐到每个镜头的台词，再一键应用镜头时长。
-
-<div align="center"><img src="docs/assets/script-voice.png" alt="脚本与口播配音" width="88%"></div>
-
-### 素材总览与封面工作台
-
-只列做出来的素材，一眼看到进度。封面按竖屏 9:16 和横屏 16:9 分别管理，支持模板、参考图和提示词。
-
-<table>
-<tr>
-<td width="50%"><img src="docs/assets/assets.png" alt="素材总览"><br><sub>素材总览</sub></td>
-<td width="50%"><img src="docs/assets/cover.png" alt="封面工作台"><br><sub>封面工作台</sub></td>
-</tr>
-</table>
-
-### 风格库与 DESIGN.md
-
-12 种内置视觉风格，选中后写入项目的 `DESIGN.md`。之后所有图片和视频素材都会遵循这份视觉规范，单个镜头的明确要求优先。
-
-<div align="center"><img src="docs/assets/styles.png" alt="风格库" width="88%"></div>
-
-### 深色模式，也适合窄窗口
-
-跟随你的习惯切换主题。放进 Agent 的侧边栏这类窄窗口时，分镜表会自动变成卡片布局。
-
-<table>
-<tr>
-<td width="66%"><img src="docs/assets/table-dark.png" alt="深色模式"></td>
-<td width="34%"><img src="docs/assets/sidebar.png" alt="窄窗口卡片布局"></td>
-</tr>
-</table>
-
-### 更多
-
-| | |
-| --- | --- |
-| 多项目管理 | 新建、重命名、复制、搜索和删除项目 |
-| 多画面比例 | `9:16`、`16:9`、`3:4`、`4:3`、`1:1` |
-| 演示模式 | 逐镜头全屏预览，检查节奏 |
-| 导出 | Markdown、HTML、Word、纯文本 |
-| 本地素材 | 上传图片 / 视频，放大预览、替换和删除 |
-
-## 🔧 环境与依赖
-
-不需要 Python。VoxCPM 独立调用示例、参考音频参数和配音依赖见 [配音运行说明](docs/voice-runtime.md)。设置里的「环境检查」只列真正需要关心的项目：
-
-<table>
-<tr>
-<td width="55%" valign="top">
-
-| 项目 | 用途 | 缺少时 |
-| --- | --- | --- |
-| 配音服务 | VoxCPM 在线服务（纯 Node 调用） | 需要联网 |
-| FFmpeg | 配音转码、时长读取 | `brew install ffmpeg` |
-| Whisper | 把配音对齐到台词 | 没有它仍可生成配音；`brew install whisper-cpp` |
-| Codex CLI | 让 Claude Code 通过 Codex 生图 | 可选，也可用 Agent 自带生图或手动上传 |
-
-</td>
-<td width="45%" valign="top"><img src="docs/assets/environment.png" alt="环境检查"></td>
-</tr>
-</table>
-
-<details>
-<summary>环境变量</summary>
-
-旧版的 `CODEX_STORYBOARD_*` 仍然有效，新变量优先。
-
-```text
-AGENT_STORYBOARD_DATA_DIR      数据目录
-AGENT_STORYBOARD_PORT          端口，默认 43218
-AGENT_STORYBOARD_FFMPEG        FFmpeg 路径（同理 _FFPROBE、_WHISPER、_WHISPER_MODEL）
-AGENT_STORYBOARD_VOXCPM_URL    自建配音服务地址
-AGENT_STORYBOARD_VOICE_CHUNK_CHARS  配音分段目标字数（默认 800，按句尾切分，非严格上限）。越大接缝越少但音色越容易后段偏移，越小越稳但接缝越多
-AGENT_STORYBOARD_CODEX         Codex CLI 路径
-AGENT_STORYBOARD_CODEX_MODEL   生图时指定 Codex 模型（默认沿用 Codex 配置；若该模型不支持 ChatGPT 账号，会自动改用 gpt-5.5 重试）
-```
-
-</details>
-
-## 🧰 MCP 工具
-
-Agent 通过这些工具工作，不需要控制浏览器，也不会直接改数据文件。
-
-| 工具 | 作用 |
-| --- | --- |
-| `open_storyboard` | 启动或连接本地分镜台，返回链接 |
-| `create_storyboard_project` | 一次性创建完整项目、全部镜头和可选 `DESIGN.md` |
-| `list_storyboard_projects` / `get_storyboard_project` | 查找项目、读取完整镜头 |
-| `update_storyboard_project` / `delete_storyboard_project` | 修改镜头、比例、视觉规范；删除项目 |
-| `list_storyboard_generation_tasks` | 读取待处理的生成任务 |
-| `generate_storyboard_image` | 一次调用完成：认领任务、通过 Codex 出图、校验、回填 |
-| `claim_…` / `complete_…` / `fail_…` / `heartbeat_storyboard_generation_task` | 处理动效视频等长任务 |
-| `plan_broll_motion` | B-roll 动效的方案确认关口 |
-| `manage_storyboard_audio` | 生成配音、选择版本、对齐台词、应用镜头时长 |
-| `inspect_storyboard_environment` | 检查配音、FFmpeg、Whisper 和本机 Agent |
-
-<details>
-<summary>常用提示词</summary>
-
-```text
-打开 Agent 分镜台。
-创建一个 9:16 的“AI 工具使用技巧”短视频分镜项目，直接写入分镜台。
-帮我把这个项目补成 8 个镜头，每个镜头写出台词、画面描述、时长和生成方式。
-处理所有待生成素材。优先生成 AI 生图，再生成动效视频。
-查看当前有哪些分镜项目，找到标题里包含“AI 工具”的项目。
-```
-
-</details>
-
-## 🔒 数据与隐私
-
-- 项目、脚本和素材保存在本机，默认目录 `~/.agent-storyboard/`。用过旧版的话，已有的 `~/.codex-storyboard/` 会继续沿用，不会搬动或丢失。
-- 本地服务只监听 `127.0.0.1`，并拒绝跨域请求。
-- 配音会把台词发送到 VoxCPM 在线服务；通过 Codex 生图时，提示词会发送到 ChatGPT 的图片服务。请注意对应服务的隐私条款。
-
-```text
-~/.agent-storyboard/
-  projects.json
-  projects/<project-id>/
-    project.json  DESIGN.md  media/  generation/
-```
-
-## 🛠 开发
-
-```bash
-git clone https://github.com/Yuuhann1999/agent-storyboard.git
+git clone https://github.com/hengji123/agent-storyboard.git
 cd agent-storyboard
-npm start            # http://127.0.0.1:43218，数据在仓库内 ./data
-npm run check        # 语法检查
-npm test             # 单元与集成测试
+npm start
 ```
 
-网页使用原生 HTML、CSS 和 JavaScript，本地服务只用 Node.js 标准库，没有运行时 npm 依赖。
+打开 [本地工作台](http://127.0.0.1:43218)。默认端口为 `43218`，源码启动的数据目录为 `./data`。不配置生成服务也可以先建立项目、编辑分镜和上传素材。
 
-<details>
-<summary>项目结构</summary>
+Windows 安装好 FFmpeg 后，也可以在 PowerShell 中运行 `./start-local.ps1`；该脚本会先检查 FFmpeg。
 
-```text
-.
-├── server.mjs                      本地服务（项目、生成任务、配音 API）
-├── public/                         前端
-├── voxcpm.mjs                      配音在线服务客户端
-├── codex-image.mjs                 通过 Codex CLI 出图的桥接
-├── runtime.mjs / audio.mjs         环境检查、FFmpeg / Whisper 调用
-├── plugins/agent-storyboard/
-│   ├── .codex-plugin/              Codex 清单
-│   ├── .claude-plugin/             Claude Code 清单
-│   ├── .mcp.codex.json             Codex 的 MCP 启动配置
-│   ├── mcp/server.mjs              MCP 服务
-│   ├── skills/                     Agent 使用说明
-│   └── app/                        随插件打包的服务和前端副本
-├── .agents/plugins/marketplace.json    Codex marketplace
-└── .claude-plugin/marketplace.json     Claude Code marketplace
-```
+### 连接 Agent
 
-根目录的 `server.mjs` 和 `public/` 是主要编辑入口，改完后同步到 `plugins/agent-storyboard/app/`（`npm test` 里有一致性检查）。
-
-</details>
-
-<details>
-<summary>本地调试插件</summary>
+仓库包含 Codex / Claude Code 插件清单、MCP 服务和配套 Skill。以下命令用于注册本地源码插件；插件加载方式以客户端支持情况为准。
 
 ```bash
+# 在本仓库根目录执行，选择所用客户端的一组命令。
 codex plugin marketplace add .
 codex plugin add agent-storyboard@agent-storyboard
+```
 
+```bash
 claude plugin marketplace add .
 claude plugin install agent-storyboard@agent-storyboard
-
-claude plugin validate .
 ```
 
-</details>
+也可以通过 MCP 客户端直接启动 `plugins/agent-storyboard/mcp/server.mjs`。HTTP 服务已运行时，参考 [mcp.local.example.json](mcp.local.example.json) 设置本机绝对路径；示例目录必须改成你的实际路径。完整接入方式见 [本地部署](LOCAL-SETUP.md)。
 
-<details>
-<summary>主要本地 API</summary>
+加载插件或修改 MCP 配置后，新开聊天检查工具是否可见。可以这样开始：
 
 ```text
-GET    /api/health
-GET    /api/environment
-GET    /api/projects                        POST 可一次性传入 shots 创建完整项目
-GET    /api/projects/:id                    PUT / PATCH / DELETE
-GET    /api/projects/:id/design             POST / DELETE
-POST   /api/projects/:id/shots              PATCH / DELETE /shots/:shotId
-POST   /api/projects/:id/shots/:shotId/media
-POST   /api/projects/:id/audio/generate     select / align / apply-durations
-GET    /api/generation/tasks                POST 入队
-POST   /api/generation/tasks/:taskId/claim  complete / fail / cancel / heartbeat
+打开 Agent 分镜台。
+创建一个 16:9 的产品广告项目，先写 8 个镜头。
+每镜分别填写景别、台词、静态画面、人物动作、机位调度和时长。
+先核对人物、场景、道具参考资产，再批量生成静态参考图和镜头调度图。
 ```
 
-</details>
+### 推荐工作顺序
 
-## License
+1. 创建项目，确定画幅、项目文件夹和视觉规范。
+2. 写入分镜，检查景别、台词、动作、调度与跨镜连续性。
+3. 上传并核对每镜参考图片；无需图片参考时明确选择。
+4. 生成静态参考图和调度图，检查结果后按镜头返修。
+5. 配置配音服务，生成配音并定位原台词时间。
+6. 连续预览声画关系，调整时长，导出分镜供后续制作。
 
-[MIT](LICENSE)
+## 相对原版的主要变化
+
+以原项目 0.8.0 源码为基线，本仓库增加或改造了以下流程：
+
+| 方向 | 当前实现 |
+| --- | --- |
+| 导演设计 | 独立景别、动作、调度说明及调度图，扩展导演详情与批量参数编辑 |
+| 图片工作流 | 静态图 / 调度图独立队列、版本历史、过期保护、自动回填 |
+| 图片约束 | 逐镜附件、用途与范围、提示词引用同步、生成前核对 |
+| 生成调度 | 本机 Codex 执行、可配置并发、自动调节与共享运行环境 |
+| 配音服务 | 增加本地 / 远程 Yovoice、模型能力选项及设置复用 |
+| 声画时序 | 原台词强制对齐、可选自动应用时长、音频驱动连续预览 |
+| 项目存储 | 支持绑定已有项目文件夹，中央索引和项目内容分开保存 |
+| 部署与验证 | Windows 运行路径、源码 / 插件副本一致性及扩展自动化测试 |
+
+原有 MCP 项目管理、多画幅、封面、视觉风格、动效任务与导出能力继续保留。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 环境与依赖
+
+| 功能 | 所需配置 |
+| --- | --- |
+| 编辑分镜、管理项目、上传素材、文档导出 | Node.js；基础功能不需要 Python |
+| 网页后台生图 | 本机 Codex CLI、有效登录与可用的图片生成服务 |
+| Yovoice 配音 | 本地或兼容 `/v1` 协议的远程服务、令牌及模型；生成 WAV 本身无需本机 FFmpeg |
+| VoxCPM 分段配音 | 可用的在线 / 自建 Gradio 服务，以及本机 FFmpeg 和 FFprobe |
+| 原台词时间定位 | FFmpeg、audio.cpp 引擎、Qwen3 Forced Aligner 模型 |
+| 参考录音识别 | FFmpeg、Whisper.cpp 和本地 Whisper 模型，可选 |
+| HyperFrames / Remotion 动效 | 对应 Agent Skill、渲染工具和依赖 |
+
+模型和运行工具不会随 Git 仓库分发。图片与配音的在线可用性、额度和输出质量取决于实际服务。
+
+常用环境变量：
+
+```text
+AGENT_STORYBOARD_DATA_DIR        数据目录
+AGENT_STORYBOARD_PORT            HTTP 端口，默认 43218
+AGENT_STORYBOARD_RUNTIME         本地工具与模型目录
+AGENT_STORYBOARD_CODEX           Codex CLI 路径
+AGENT_STORYBOARD_CODEX_MODEL     图片生成桥接使用的模型
+AGENT_STORYBOARD_FFMPEG          FFmpeg 路径
+AGENT_STORYBOARD_FFPROBE         FFprobe 路径
+AGENT_STORYBOARD_ALIGNER         audio.cpp 引擎路径
+AGENT_STORYBOARD_ALIGNER_MODEL   Qwen3 Forced Aligner 模型路径
+AGENT_STORYBOARD_WHISPER         Whisper CLI 路径
+AGENT_STORYBOARD_WHISPER_MODEL   Whisper 模型路径
+AGENT_STORYBOARD_VOXCPM_URL      VoxCPM Gradio 服务地址
+AGENT_STORYBOARD_VOICE_CHUNK_CHARS  VoxCPM 分段目标字数，默认 800
+```
+
+原有 `CODEX_STORYBOARD_*` 兼容变量的处理见 `env-compat.mjs`。Yovoice 地址、令牌和模型可在网页配音设置中保存。
+
+## 项目与数据
+
+源码启动默认使用仓库内 `data/`。插件独立启动默认使用 `~/.agent-storyboard/`；存在旧 `~/.codex-storyboard/` 时继续沿用。显式指定的数据目录优先。
+
+创建项目时可以绑定一个已存在的本机项目文件夹，内容保存在：
+
+```text
+<项目文件夹>/.agent-storyboard/<项目ID>/
+  project.json
+  DESIGN.md
+  media/
+  generation/
+```
+
+中央数据目录中的 `projects.json` 登记索引；备份时同时保留索引和实际项目内容。未绑定文件夹的项目继续使用中央数据目录。项目不会自动迁移。
+
+项目内容保存在本机，但生成所需的提示词、台词、附件或参考音频会发送到所选生成服务；本地强制对齐和本地 Whisper 识别不上传音频。Yovoice 是否联网取决于服务部署。
+
+配音令牌保存在本机 `voice-settings.json`，该文件已忽略，不随项目导出，也不由设置读取接口返回。当前仓库不提交日常项目、生成素材、配音设置或本机生图并发设置。
+
+## MCP 工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `open_storyboard` | 打开或连接工作台 |
+| `create_storyboard_project` | 创建项目、镜头和视觉规范，可指定 `projectFolder` |
+| `list_storyboard_projects` / `get_storyboard_project` | 查找与读取项目 |
+| `update_storyboard_project` / `delete_storyboard_project` | 修改或删除项目 |
+| `queue_storyboard_images` | 按静态参考图 / 调度图分别排队 |
+| `manage_storyboard_blocking_image` | 附加或移除调度图 |
+| `list_storyboard_generation_tasks` | 查询生成任务 |
+| `generate_storyboard_image` | 通过本机 Codex 生成并回填图片 |
+| `claim_storyboard_generation_task` / `complete_storyboard_generation_task` / `fail_storyboard_generation_task` / `heartbeat_storyboard_generation_task` | 处理 Agent 生成任务及长任务状态 |
+| `plan_broll_motion` | 记录 B-roll 模板、动效方案及确认状态 |
+| `manage_storyboard_audio` | 配音版本、台词时间定位与时长应用 |
+| `inspect_storyboard_environment` | 查看运行环境状态 |
+
+## 文档
+
+- [本地部署与 MCP 接入](LOCAL-SETUP.md)
+- [参考资产与生图约束](REFERENCE-ASSETS.md)
+- [配音设置与自动对齐](VOICE-SETTINGS.md)
+- [配音运行环境与独立 VoxCPM 调用](docs/voice-runtime.md)
+- [产品定位](PRODUCT.md)
+- [版本记录](CHANGELOG.md)
+
+## 开发
+
+```bash
+npm run check
+npm test
+```
+
+根目录服务与 `public/` 是开发入口，`plugins/agent-storyboard/app/` 是随插件分发的副本；修改共享代码后同步两处。测试覆盖项目 API、图片任务、参考资产、配音流程、对齐数据、连续预览及插件一致性；依赖未安装时，相关集成测试可能跳过。测试不会证明真实生成服务的音质或图片质量。
+
+```text
+server.mjs / public/       本地 HTTP 服务与前端
+shot-images.mjs           静态图、调度图任务与版本
+reference-*.mjs           参考附件、用途与引用同步
+image-concurrency.mjs     图片并发调度
+audio.mjs                 配音处理与时间定位入口
+voice-provider.mjs        Yovoice / VoxCPM 适配
+forced-align.mjs          原台词强制对齐
+runtime.mjs               本地工具与模型发现
+plugins/agent-storyboard/  MCP、插件清单、Skill 与应用副本
+tests/                    自动化测试
+```
+
+`docs/assets/` 中保留的旧界面图片、早期设计稿和历史实测记录属于历史资料，不代表当前界面或服务状态。
+
+## 来源与许可证
+
+原项目：[Yuuhann1999/agent-storyboard](https://github.com/Yuuhann1999/agent-storyboard)，作者 Yuuhann1999。本仓库从原版源码快照建立，未保留上游完整提交历史；后续扩展在本仓库记录。
+
+采用 [MIT License](LICENSE)，保留原作者版权声明。当前维护与问题反馈：[hengji123/agent-storyboard](https://github.com/hengji123/agent-storyboard)。

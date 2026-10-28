@@ -1,19 +1,22 @@
 {
   "name": "agent-storyboard",
-  "version": "0.8.0",
-  "description": "Local storyboard workbench for AI agents: create and manage video storyboard projects, generate image/video assets per shot, add voiceover, and see results land in the right row.",
+  "version": "0.9.0",
+  "description": "Local AI director workbench: shot design, reference assets, static and blocking images, Yovoice voiceover, forced alignment, and animatic preview via MCP.",
   "author": {
-    "name": "Yuuhann"
+    "name": "hengji123"
   },
-  "homepage": "https://github.com/Yuuhann1999/agent-storyboard",
-  "repository": "https://github.com/Yuuhann1999/agent-storyboard",
+  "homepage": "https://github.com/hengji123/agent-storyboard",
+  "repository": "https://github.com/hengji123/agent-storyboard",
   "license": "MIT",
   "keywords": [
     "storyboard",
-    "video",
-    "short-video",
+    "ai-director",
+    "shot-design",
     "mcp",
-    "image-generation"
+    "image-generation",
+    "voiceover",
+    "forced-alignment",
+    "animatic"
   ],
   "mcpServers": {
     "agent-storyboard": {

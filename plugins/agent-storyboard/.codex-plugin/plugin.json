@@ -1,16 +1,16 @@
 {
   "name": "agent-storyboard",
-  "version": "0.8.0+codex.20260930213133",
-  "description": "Start the local Agent Storyboard app, create and manage storyboard projects, process image and video generation tasks, and return assets to the right shot. Works in Codex and Claude Code.",
+  "version": "0.9.0",
+  "description": "Local AI director workbench: shot design, reference assets, static and blocking images, Yovoice voiceover, forced alignment, and animatic preview via MCP.",
   "author": {
-    "name": "Yuuhann"
+    "name": "hengji123"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "Agent Storyboard",
-    "shortDescription": "Open a local storyboard app, create storyboards, and generate image/video assets.",
-    "longDescription": "Agent Storyboard starts a bundled local storyboard app, then lets your agent create, find, update, and delete complete projects without browser automation. It reads pending shots, honors project aspect ratios and DESIGN.md, routes assets to image generation, HyperFrames, or Remotion, and returns outputs to the correct project and row. Agents without their own image generation (for example Claude Code) can generate through the local Codex CLI.",
-    "developerName": "Yuuhann",
+    "displayName": "Agent 分镜台 · AI 导演工作台",
+    "shortDescription": "Design shots, bind references, generate images and voiceover, and preview animatics.",
+    "longDescription": "A local AI director workbench maintained by hengji123, based on Yuuhann1999/agent-storyboard. Manage complete projects through MCP; design shot sizes, actions and camera blocking; bind reference assets with usage constraints; generate versioned static and blocking images; use local or remote Yovoice and VoxCPM voiceover; align the original dialogue locally and review the result in an audio-driven animatic. Project files can live in existing production folders. Image and motion generation use configured agent tools and services.",
+    "developerName": "hengji123",
     "category": "Productivity",
     "brandColor": "#0AA6BD",
     "capabilities": [
@@ -26,12 +26,20 @@
       "HyperFrames video routing",
       "Remotion video routing",
       "B-roll motion planning and confirmation gate",
-      "Automatic local asset return"
+      "Automatic local asset return",
+      "Shot size, action and camera blocking design",
+      "Per-shot reference assets and review",
+      "Versioned static and blocking images",
+      "Configurable local image concurrency",
+      "Local and remote Yovoice voiceover",
+      "Original-dialogue forced alignment",
+      "Audio-driven animatic preview",
+      "Project folder storage"
     ],
     "defaultPrompt": [
-      "Open Agent Storyboard.",
-      "Create a complete storyboard project from my video idea and write it into Agent Storyboard.",
-      "Process all pending storyboard generation tasks."
+      "打开 Agent 分镜台。",
+      "创建完整导演分镜，分别填写景别、台词、静态画面、动作与镜头调度。",
+      "核对逐镜参考资产后，生成静态参考图和调度图。"
     ]
   },
   "mcpServers": "./.mcp.codex.json"

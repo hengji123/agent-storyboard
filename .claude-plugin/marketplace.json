@@ -1,13 +1,17 @@
 {
   "name": "agent-storyboard",
-  "owner": { "name": "Yuuhann" },
-  "metadata": { "description": "Agent Storyboard: a local storyboard workbench for Codex and Claude Code." },
+  "owner": {
+    "name": "hengji123"
+  },
+  "metadata": {
+    "description": "Local AI director workbench: shot design, reference assets, static and blocking images, Yovoice voiceover, forced alignment, and animatic preview via MCP."
+  },
   "plugins": [
     {
       "name": "agent-storyboard",
       "source": "./plugins/agent-storyboard",
-      "description": "Create storyboard projects, generate image and video assets per shot, add voiceover, and see results land in the right row.",
-      "version": "0.8.0",
+      "description": "Local AI director workbench: shot design, reference assets, static and blocking images, Yovoice voiceover, forced alignment, and animatic preview via MCP.",
+      "version": "0.9.0",
       "category": "productivity"
     }
   ]

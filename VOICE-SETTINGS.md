@@ -1,5 +1,7 @@
 # 配音设置与自动对齐
 
+适用版本：0.9.0。支持本地 Yovoice、兼容协议的远程 Yovoice API 和 VoxCPM 在线服务。服务与本地工具安装要求见 [配音运行环境](docs/voice-runtime.md)。
+
 配音服务连接和模型参数保存在本机的 voice-settings.json，不写入项目或 Git；声音描述、参考音频原文和自动应用时长偏好保存在所属项目。
 
 VoxCPM2 支持声音设计、音色克隆、精细克隆。精细克隆需要准确的参考原文，声音描述不参与此模式。引导强度、推理步数和随机种子使用接口对应参数。模型专属参数按本地 `/v1/models` 的 generationOptions 展示，按 family 写入 modelOptions。

@@ -1,14 +1,76 @@
-# VoxCPM 配音调用与运行环境
+# 配音服务与本地运行环境
 
-当前配音通过 `voxcpm.mjs` 直接调用 VoxCPM 在线 Gradio 服务，不需要 Python、`gradio_client` 或 npm 第三方依赖。旧版 `voice/voxcpm.py` 和 `voice/vendor/voxcpm_tts.py` 已不再使用。
+适用版本：0.9.0。分镜台支持本地 / 远程 Yovoice 和 VoxCPM，生成配音与原台词时间定位是独立步骤。设置行为见 [配音设置与自动对齐](../VOICE-SETTINGS.md)。
 
-生成时会发送待朗读文字、语气指令，以及提供的参考音频和参考原文。界面生成前会要求确认；独立调用脚本时也应确认这些内容可以发送到在线服务。默认服务地址和参数以 `voxcpm.mjs` 为准。
+## 服务选择
 
-## 给其他 AI 或项目复用
+| 服务 | 连接方式 | 本机依赖 |
+| --- | --- | --- |
+| 本地 Yovoice | 默认 `http://127.0.0.1:8080/v1`，填写令牌，选择已安装模型和音色 | 下载生成 WAV 本身无需 FFmpeg |
+| 远程 Yovoice API | 兼容相同 `/v1` 协议的服务地址和令牌 | 同上；音频和文本按所选服务处理 |
+| VoxCPM | 兼容 Gradio 协议的在线 / 自建服务 | 工作台分段、转码和拼接需 FFmpeg / FFprobe |
 
-只需复制仓库根目录的 `voxcpm.mjs`。它仅导入 Node.js 内置模块，不依赖分镜台服务。使用支持内置 `fetch`、`FormData`、`Blob` 和 `AbortSignal.timeout` 的 Node.js（例如 Node.js 22）。
+Yovoice 的声音设计、音色克隆、精细克隆与模型参数，以实际服务返回的能力为准。工作台未提供任意厂商 TTS API 的通用适配。
 
-在同一目录创建 `generate-voice.mjs`：
+服务连接、令牌和模型设置保存在中央数据目录的 `voice-settings.json`；声音描述、参考原文和自动应用时长偏好属于项目。配音令牌不会随项目导出或由设置读取接口返回，切换地址时不会自动把旧令牌发送给新服务。
+
+## 工作台中的配音流程
+
+`audio.mjs` 与 `voice-provider.mjs` 负责选择服务、生成和保存音频。Yovoice 使用异步任务并下载 WAV。VoxCPM 长文按句尾分段，默认以每段约 800 字为目标；每段使用同一份参考音频，通过 FFmpeg 裁剪静音、统一响度并拼接。
+
+生成新版本复用已保存配置。开启自动处理后，生成的音频继续进入原台词时间定位；失败时保留音频和镜头时长，并显示具体原因。关闭自动处理时只生成配音。
+
+## 原台词强制对齐
+
+镜头时间定位使用本地 audio.cpp 引擎和 Qwen3 Forced Aligner 模型：
+
+1. FFmpeg 将音频转为单声道 16 kHz WAV。
+2. 启动独立 CPU 对齐进程，监听随机本机端口。
+3. 向本机对齐接口提交音频和镜头原台词，校验返回内容与时间。
+4. 保存镜头区间及字幕；按需应用有台词镜头的时长。
+5. 完成后关闭对齐进程并清理临时文件。
+
+字幕保留原台词，对齐模型只定位时间。输出未覆盖完整台词、时间戳无效，或处理期间台词已变更时，不应用旧结果。相同音频与未变台词的对齐结果可以复用，新配音不会套用旧版本时间轴。
+
+无台词镜头保留原时长，不会自动向配音文件插入静音；连续预览时需检查总时长和留白。强制对齐依然需要人工试听边界，不保证音素级精度。
+
+Whisper 仅用于独立参考录音的原文识别，不参与镜头时间定位。缺少强制对齐引擎或模型时，不会自动退回 Whisper 听写。
+
+## 环境配置
+
+```text
+AGENT_STORYBOARD_RUNTIME            工具与模型目录，默认 .runtime-voice
+AGENT_STORYBOARD_FFMPEG             FFmpeg 可执行文件
+AGENT_STORYBOARD_FFPROBE            FFprobe 可执行文件
+AGENT_STORYBOARD_ALIGNER            audio.cpp 引擎可执行文件
+AGENT_STORYBOARD_ALIGNER_MODEL      Qwen3 Forced Aligner 模型
+AGENT_STORYBOARD_WHISPER            Whisper CLI，可选
+AGENT_STORYBOARD_WHISPER_MODEL      Whisper 模型，可选
+AGENT_STORYBOARD_VOXCPM_URL          兼容的 VoxCPM Gradio 服务
+AGENT_STORYBOARD_VOICE_CHUNK_CHARS   VoxCPM 分段目标字数，默认 800
+```
+
+源码服务和插件副本共享仓库运行目录。FFmpeg / FFprobe 优先使用指定路径或本地工具，Windows 还尝试 WinGet 安装目录，最后查找 PATH。运行工具与模型不会隐式安装。
+
+Windows 本地目录示例：
+
+```text
+.runtime-voice/
+  ffmpeg/bin/ffmpeg.exe
+  ffmpeg/bin/ffprobe.exe
+  forced-aligner/qwen3-aligner.gguf
+  forced-aligner/engine-path.txt
+  whisper/whisper-cli.exe
+  ggml-large-v3-turbo-q5_0.bin
+```
+
+`engine-path.txt` 写入 audio.cpp 引擎的本机路径，也可用环境变量覆盖引擎及模型路径。引擎需支持本工作台使用的配置文件与 `/v1/audio/alignments` 协议。
+
+Whisper 模型依次查找运行目录中的 Turbo 模型与 `~/.cache/dsh-whisper/` 中已有模型。没有参考录音识别需求时无需安装 Whisper。
+
+## 独立调用 VoxCPM
+
+`voxcpm.mjs` 仅使用 Node.js 内置模块，可单文件复用。建议 Node.js 22 或更高版本：
 
 ```javascript
 import { generateVoxcpm } from "./voxcpm.mjs";
@@ -18,81 +80,24 @@ await generateVoxcpm({
   output: "./speech.wav",
   instruction: "自然清晰的普通话，温暖平静"
 });
-
-console.log("音频已保存到 speech.wav");
 ```
 
-运行以下命令会实际发送文字并生成音频：
+执行会向所选服务发送台词并生成音频；`output` 的父目录必须存在，同名文件会被覆盖。函数完成文件写入，不返回音频对象。
 
-```bash
-node generate-voice.mjs
-```
+| 参数 | 说明 |
+| --- | --- |
+| `text` / `output` | 待朗读文字、输出文件路径，必填 |
+| `instruction` | 声音或语气描述 |
+| `promptWav` / `promptText` | 本地参考音频和准确原文 |
+| `apiBase` | 服务地址；默认读取 `AGENT_STORYBOARD_VOXCPM_URL`，否则使用客户端默认值 |
+| `cfg` / `steps` | 引导强度 / 推理步数，默认 2.0 / 10 |
+| `normalize` / `denoise` | 服务端文本规范化 / 降噪，默认 true / false |
+| `timeoutMs` | 超时，默认 600000 毫秒 |
 
-`output` 的父目录必须已存在；同名文件会被覆盖。函数成功时完成文件写入，没有返回音频对象。
+独立客户端不自动识别参考原文、转码、分段或拼接；完整工作台处理需要其他模块。
 
-| 参数 | 说明 | 默认值 |
-| --- | --- | --- |
-| `text` | 待朗读文字，必填 | — |
-| `output` | 音频保存路径，必填 | — |
-| `instruction` | 语气或声音风格指令 | 空字符串 |
-| `promptWav` | 本地参考音频路径，用于音色克隆；建议使用 WAV | 空字符串 |
-| `promptText` | 参考音频的准确原文；同时提供参考音频时才启用文本引导 | 空字符串 |
-| `apiBase` | 兼容相同 Gradio 接口的服务地址 | `AGENT_STORYBOARD_VOXCPM_URL` 或 `https://voxcpm.modelbest.cn` |
-| `cfg` / `steps` | 生成参数 | `2.0` / `10` |
-| `normalize` / `denoise` | 服务端文本规范化 / 降噪 | `true` / `false` |
-| `userId` | 传给服务的用户标识 | `agent-storyboard` |
-| `timeoutMs` | 上传、生成和下载共用的超时时间 | 600000（10 分钟） |
+## 验证与历史资料
 
-克隆音色时，在调用参数中增加 `promptWav: "/绝对路径/reference.wav"` 和 `promptText: "参考音频中实际说出的文字"`。独立客户端不会自动识别参考原文、转码、分段或拼接，只保存服务返回的音频文件。
+`npm run check` 和 `npm test` 用于语法与自动化验证，不证明在线服务可用或实际音质合格。真实生成、音色、时间边界与连续预览应在配置完成后用少量素材试听检查。
 
-## 分镜台内的完整配音流程
-
-`audio.mjs` 调用上述客户端，并负责以下处理：
-
-- 按句尾将长文尽量均分，默认以每段约 800 字为目标；这不是严格的字数上限，单个长句不会被强行截断。
-- 每段重新使用同一份参考音频，失败最多尝试三次。
-- 用 FFmpeg 裁掉各段首尾静音、统一响度并拼接；接缝补 0.18 秒停顿，段落接缝补 0.4 秒。
-- 输出 48 kHz 单声道 PCM WAV，并用 FFprobe 读取时长。
-
-完整配音需要 FFmpeg 和 FFprobe；Whisper.cpp 和本地模型用于参考音频原文识别及台词对齐，缺少时仍可生成配音。服务在未提供参考原文时会尝试本地识别，识别失败则退回纯音频克隆。
-
-`audio.mjs` 还依赖 `runtime.mjs` 和 `recognition.mjs`，不能像 `voxcpm.mjs` 一样单文件复制后直接使用。其他 AI 可以参考其分段、裁剪和拼接逻辑。
-
-## 环境配置
-
-分镜台支持以下环境变量；服务启动时也兼容旧 `CODEX_STORYBOARD_*` 前缀，新变量优先。单独导入 `voxcpm.mjs` 时只读取新前缀的服务地址变量，或直接传 `apiBase`。
-
-```text
-AGENT_STORYBOARD_VOXCPM_URL          兼容的在线配音服务地址
-AGENT_STORYBOARD_VOICE_CHUNK_CHARS   长文分段目标字数，默认 800
-AGENT_STORYBOARD_FFMPEG             FFmpeg 可执行文件路径
-AGENT_STORYBOARD_FFPROBE            FFprobe 可执行文件路径
-AGENT_STORYBOARD_WHISPER            whisper-cli 可执行文件路径
-AGENT_STORYBOARD_WHISPER_MODEL      本地 Whisper 模型文件路径
-AGENT_STORYBOARD_RUNTIME            共享运行工具和模型的目录，默认仓库内 .runtime-voice
-```
-
-可执行文件优先使用显式路径，然后查找本地工具，最后尝试 PATH 中的命令；Windows 的 FFmpeg / FFprobe 还会尝试 WinGet 安装目录。本地工具目录布局：
-
-```text
-.runtime-voice/ffmpeg/bin/ffmpeg.exe
-.runtime-voice/ffmpeg/bin/ffprobe.exe
-.runtime-voice/whisper/whisper-cli.exe
-.runtime-voice/ggml-large-v3-turbo-q5_0.bin
-```
-
-模型默认依次查找运行目录里的 `ggml-large-v3-turbo-q5_0.bin`、`ggml-large-v3-turbo.bin`，以及 `~/.cache/dsh-whisper/` 下的 `ggml-large-v3-turbo.bin`、`ggml-large-v3.bin`。依赖不会隐式安装。
-
-## 台词对齐
-
-Whisper 在本地识别音频并提供文本、时间戳，不会把识别音频上传到在线识别服务。CPU 识别可能较慢，对齐识别超时为 30 分钟。
-
-分镜台把识别结果映射到有台词的镜头，允许标点差异及部分识别错误；匹配不足会报错。多字符 token 内部时间通过插值估计，因此这是识别辅助对齐，不保证音素级精度，应用前应检查边界。修改台词或镜头顺序后，旧对齐结果会被拒绝。无台词镜头保留原时长，但不会自动向配音文件插入对应静音。
-
-## 验证
-
-`npm test` 和 `npm run check` 用于离线测试及语法检查，不证明当前在线服务可用或音质符合要求。
-
-需要实测时，先运行开发服务，再执行 `node scripts/voice-smoke.mjs`。脚本默认连接 `http://127.0.0.1:43218`，可用 `CODEX_STORYBOARD_URL` 指定测试服务。它会创建并保留测试项目和音频，将合成测试台词发送到 VoxCPM，然后运行本地识别、应用时长并检查旧对齐结果拒绝逻辑。请使用临时数据目录启动服务，以免把测试项目写入日常数据。
-
-[2026-09-14 的旧版实测记录](voice-smoke-results.md) 仅供历史参考，不能作为当前 Node 客户端的在线验证结果。
+`scripts/voice-smoke.mjs` 和 [早期实测记录](voice-smoke-results.md) 保留的是旧 VoxCPM / Whisper 流程，脚本仍含旧引擎断言，不适合作为当前强制对齐流程的验收入口。

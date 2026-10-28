@@ -1,7 +1,7 @@
 {
   "name": "agent-storyboard",
   "interface": {
-    "displayName": "Agent Storyboard"
+    "displayName": "Agent 分镜台 · AI 导演工作台"
   },
   "plugins": [
     {

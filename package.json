@@ -1,11 +1,25 @@
 {
   "name": "agent-storyboard",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "start": "node server.mjs --data-dir ./data",
     "check": "node --check server.mjs && node --check public/app.js && node --check plugins/agent-storyboard/mcp/server.mjs && node --check plugins/agent-storyboard/app/server.mjs && node --check plugins/agent-storyboard/app/public/app.js"
-  }
+  },
+  "description": "Local AI director workbench: shot design, reference assets, static and blocking images, Yovoice voiceover, forced alignment, and animatic preview via MCP.",
+  "homepage": "https://github.com/hengji123/agent-storyboard",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hengji123/agent-storyboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hengji123/agent-storyboard/issues"
+  },
+  "license": "MIT",
+  "author": "hengji123",
+  "contributors": [
+    "Yuuhann1999 (original project)"
+  ]
 }
